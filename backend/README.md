@@ -1,11 +1,14 @@
-# RIG Backend — Sprints 1–2
+# RIG Backend — Sprints 1–3
 
-Implements the Sprint 1–2 scope from [docs/16](../docs/16-mvp-scope-and-build-plan.md):
+Implements the Sprint 1–3 scope from [docs/16](../docs/16-mvp-scope-and-build-plan.md):
 tenant-isolated Postgres schema, tamper-evident audit log, signal registry +
 deterministic engine, explained renewal-risk score, evidence/citation store,
 JWT-authenticated API, the Acme Corp demo seed, the connector framework with
-HubSpot + Stripe connectors, and identity resolution v1 with a human review
-queue.
+HubSpot + Stripe + Zendesk connectors, identity resolution v1 with a human
+review queue, CSV usage import with validation reports, data-quality
+monitoring v0 (freshness + hygiene, coupled to signal suppression), and the
+workbench backend: insight lifecycle state machine, deterministic urgency
+ranking, and feedback capture.
 
 ## Layout
 

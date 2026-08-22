@@ -8,12 +8,13 @@ isolation below the application layer.
 from datetime import date
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from sqlalchemy import text
 
 from . import audit
 from .auth import Principal, require
 from .db import tenant_session
+from .insights import upsert_risk_insight
 from .scoring import compute_renewal_risk
 from .signals.engine import evaluate_account
 
@@ -179,6 +180,9 @@ def evaluate(
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         score = compute_renewal_risk(session, principal.tenant_id, account_id, as_of=as_of)
+        insight_id = upsert_risk_insight(
+            session, str(principal.tenant_id), str(account_id), score
+        )
         audit.record(
             session, tenant_id=principal.tenant_id, actor_type="user",
             actor_id=principal.user_id, action="signals.evaluate",
@@ -186,4 +190,117 @@ def evaluate(
             payload={"summary": summary, "score_version": score["score_version"] if score else None},
         )
         return {"evaluation": summary,
-                "score": score if score else {"status": "insufficient_data"}}
+                "score": score if score else {"status": "insufficient_data"},
+                "insight_id": str(insight_id) if insight_id else None}
+
+
+# ---------------------------------------------------------------------------
+# Workbench: ranked insights, lifecycle, feedback
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/workbench")
+def get_workbench(
+    state: str | None = Query(default=None),
+    principal: Principal = Depends(require("accounts:read")),
+):
+    from .insights import workbench
+
+    with tenant_session(principal.tenant_id) as session:
+        return {"insights": workbench(session, state=state),
+                "ranking": "urgency = severity_rank × (1 + ARR/$100k) × confidence"}
+
+
+@app.post("/v1/insights/{insight_id}/transition")
+def transition(
+    insight_id: UUID,
+    to_state: str = Query(...),
+    reason: str | None = Query(default=None),
+    principal: Principal = Depends(require("accounts:write")),
+):
+    from .insights import transition_insight
+
+    with tenant_session(principal.tenant_id) as session:
+        try:
+            result = transition_insight(
+                session, str(principal.tenant_id), insight_id, to_state,
+                actor_id=principal.user_id, reason=reason,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
+                     actor_id=principal.user_id, action="insight.transition",
+                     object_type="insight", object_id=str(insight_id),
+                     payload={**result, "reason": reason})
+        return result
+
+
+@app.post("/v1/insights/{insight_id}/feedback")
+def insight_feedback(
+    insight_id: UUID,
+    verdict: str = Query(...),
+    comment: str | None = Query(default=None),
+    principal: Principal = Depends(require("accounts:read")),
+):
+    valid = {"correct", "incorrect", "useful", "not_useful", "missing_context", "already_known"}
+    if verdict not in valid:
+        raise HTTPException(status_code=422, detail=f"verdict must be one of {sorted(valid)}")
+    with tenant_session(principal.tenant_id) as session:
+        exists = session.execute(
+            text("SELECT 1 FROM insight WHERE id = :id"), {"id": str(insight_id)}
+        ).scalar_one_or_none()
+        if not exists:
+            raise HTTPException(status_code=404, detail="insight not found")
+        session.execute(text(
+            "INSERT INTO feedback_event (tenant_id, subject_type, subject_id, verdict,"
+            " comment, user_id) VALUES (:tid, 'insight', :sid, :verdict, :comment, :uid)"
+        ), {"tid": str(principal.tenant_id), "sid": str(insight_id), "verdict": verdict,
+            "comment": comment, "uid": principal.user_id})
+        return {"status": "recorded"}
+
+
+# ---------------------------------------------------------------------------
+# Data quality + usage import
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/admin/data-quality")
+def list_data_quality(principal: Principal = Depends(require("sources:manage"))):
+    with tenant_session(principal.tenant_id) as session:
+        rows = session.execute(text(
+            "SELECT id, issue_class, severity, title, impact, affected_refs, state,"
+            " detected_at, resolved_at FROM data_quality_issue"
+            " ORDER BY state, severity DESC, detected_at DESC"
+        )).mappings().all()
+        return {"issues": [dict(r) for r in rows]}
+
+
+@app.post("/v1/admin/data-quality/run")
+def run_data_quality(principal: Principal = Depends(require("sources:manage"))):
+    from .data_quality import run_checks
+
+    with tenant_session(principal.tenant_id) as session:
+        summary = run_checks(session, str(principal.tenant_id))
+        audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
+                     actor_id=principal.user_id, action="data_quality.run",
+                     payload=summary)
+        return summary
+
+
+@app.post("/v1/admin/usage/import")
+async def usage_import(
+    request: Request,
+    principal: Principal = Depends(require("sources:manage")),
+):
+    from .usage_import import import_usage_csv
+
+    content = (await request.body()).decode("utf-8", errors="replace")
+    if not content.strip():
+        raise HTTPException(status_code=422, detail="empty body; POST CSV content")
+    with tenant_session(principal.tenant_id) as session:
+        report = import_usage_csv(session, str(principal.tenant_id), content)
+        audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
+                     actor_id=principal.user_id, action="usage.csv_import",
+                     payload={"status": report["status"], "imported": report["imported"],
+                              "error_count": report.get("error_count", 0)})
+        return report

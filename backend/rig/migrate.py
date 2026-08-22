@@ -43,7 +43,11 @@ def run_migrations() -> list[str]:
         for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
             if path.name in done:
                 continue
-            conn.execute(text(path.read_text()))
+            # Raw DBAPI cursor: migration SQL must reach the server verbatim —
+            # files legitimately contain ':' words (comments) and '%' (format()
+            # in DO blocks) that client-side parameter parsing would mangle.
+            with conn.connection.cursor() as cursor:
+                cursor.execute(path.read_text())
             conn.execute(
                 text("INSERT INTO schema_migrations (filename) VALUES (:f)"),
                 {"f": path.name},

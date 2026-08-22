@@ -18,6 +18,8 @@ TENANT_TABLES = [
     # 0002
     "data_source", "sync_run", "raw_record", "contact", "opportunity",
     "source_link", "identity_candidate",
+    # 0003
+    "insight", "insight_transition", "feedback_event", "data_quality_issue",
 ]
 
 

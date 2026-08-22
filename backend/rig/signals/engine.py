@@ -171,6 +171,12 @@ def detect_critical_ticket_unresolved(session: Session, account, params: dict, t
 
 
 def detect_usage_drop_vs_baseline(session: Session, account, params: dict, today: date) -> list[Detection]:
+    # FP prevention (docs/07 U1): never fire on a stale feed — a drop that is
+    # really a broken pipeline is a data-quality issue, not a churn signal.
+    from ..data_quality import usage_is_fresh
+
+    if not usage_is_fresh(session, str(account["id"]), today):
+        return []
     baseline_start = today - timedelta(days=params["baseline_days"])
     observe_start = today - timedelta(days=params["observe_days"])
     rows = session.execute(text(
