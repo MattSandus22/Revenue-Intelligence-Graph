@@ -16,8 +16,8 @@ from fastapi import Depends, HTTPException, Request
 from .config import settings
 
 CAPABILITIES: dict[str, set[str]] = {
-    "org_admin": {"accounts:read", "admin:evaluate", "audit:read", "users:manage"},
-    "data_admin": {"accounts:read", "admin:evaluate"},
+    "org_admin": {"accounts:read", "admin:evaluate", "audit:read", "users:manage", "sources:manage"},
+    "data_admin": {"accounts:read", "admin:evaluate", "sources:manage"},
     "model_admin": {"accounts:read", "admin:evaluate", "scores:configure"},
     "leader": {"accounts:read", "accounts:write", "admin:evaluate"},
     "contributor": {"accounts:read", "accounts:write"},

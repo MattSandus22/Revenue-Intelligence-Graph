@@ -96,6 +96,76 @@ def get_risk(account_id: UUID, principal: Principal = Depends(require("accounts:
         }
 
 
+@app.get("/v1/admin/sources")
+def list_sources(principal: Principal = Depends(require("sources:manage"))):
+    with tenant_session(principal.tenant_id) as session:
+        rows = session.execute(text(
+            "SELECT ds.id, ds.type, ds.name, ds.status, ds.cursors,"
+            " (SELECT row_to_json(sr) FROM (SELECT status, mode, stats, error, started_at,"
+            "   finished_at FROM sync_run WHERE data_source_id = ds.id"
+            "   ORDER BY started_at DESC LIMIT 1) sr) AS last_run"
+            " FROM data_source ds ORDER BY ds.created_at"
+        )).mappings().all()
+        return {"sources": [dict(r) for r in rows]}
+
+
+@app.get("/v1/admin/identity/candidates")
+def list_identity_candidates(principal: Principal = Depends(require("sources:manage"))):
+    with tenant_session(principal.tenant_id) as session:
+        rows = session.execute(text(
+            "SELECT ic.id, ic.source_system, ic.source_record_id, ic.display,"
+            " ic.suggested_entity_id, ic.suggested_confidence, ic.match_method, ic.created_at,"
+            " a.name AS suggested_account_name"
+            " FROM identity_candidate ic LEFT JOIN account a ON a.id = ic.suggested_entity_id"
+            " WHERE ic.status = 'pending' ORDER BY ic.created_at"
+        )).mappings().all()
+        return {"candidates": [dict(r) for r in rows]}
+
+
+@app.post("/v1/admin/identity/candidates/{candidate_id}/accept")
+def accept_identity_candidate(
+    candidate_id: UUID,
+    target_account_id: UUID | None = None,
+    create_account: bool = False,
+    principal: Principal = Depends(require("sources:manage")),
+):
+    from .resolution import accept_candidate
+
+    with tenant_session(principal.tenant_id) as session:
+        try:
+            account_id = accept_candidate(
+                session, principal.tenant_id, candidate_id,
+                resolved_by=principal.user_id,
+                target_account_id=target_account_id, create_account=create_account,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
+                     actor_id=principal.user_id, action="identity.candidate.accept",
+                     object_type="identity_candidate", object_id=str(candidate_id),
+                     payload={"account_id": str(account_id), "created": create_account})
+        return {"status": "accepted", "account_id": str(account_id)}
+
+
+@app.post("/v1/admin/identity/candidates/{candidate_id}/reject")
+def reject_identity_candidate(
+    candidate_id: UUID,
+    principal: Principal = Depends(require("sources:manage")),
+):
+    from .resolution import reject_candidate
+
+    with tenant_session(principal.tenant_id) as session:
+        try:
+            reject_candidate(session, principal.tenant_id, candidate_id,
+                             resolved_by=principal.user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
+                     actor_id=principal.user_id, action="identity.candidate.reject",
+                     object_type="identity_candidate", object_id=str(candidate_id))
+        return {"status": "rejected"}
+
+
 @app.post("/v1/admin/accounts/{account_id}/evaluate")
 def evaluate(
     account_id: UUID,

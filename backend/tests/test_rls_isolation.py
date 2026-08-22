@@ -15,6 +15,9 @@ TENANT_TABLES = [
     "tenant", "app_user", "account", "invoice", "support_ticket",
     "usage_metric_daily", "signal", "evidence_object", "evidence_citation",
     "score", "score_component", "audit_event",
+    # 0002
+    "data_source", "sync_run", "raw_record", "contact", "opportunity",
+    "source_link", "identity_candidate",
 ]
 
 
@@ -42,8 +45,10 @@ def test_no_tenant_scoped_table_missing_from_gate(database):
 
 def test_cross_tenant_reads_are_blocked(seeded):
     with tenant_session(seeded["nsc_tenant"]) as s:
+        ids = {str(i) for i in s.execute(text("SELECT id FROM account")).scalars().all()}
         names = s.execute(text("SELECT name FROM account")).scalars().all()
-    assert "Acme Corp" in names and "Zenith Corp" not in names
+    assert seeded["acme_account"] in ids
+    assert "Zenith Corp" not in names
 
     with tenant_session(seeded["other_tenant"]) as s:
         names = s.execute(text("SELECT name FROM account")).scalars().all()

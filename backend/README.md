@@ -1,9 +1,11 @@
-# RIG Backend — Sprint 1 Platform Foundation
+# RIG Backend — Sprints 1–2
 
-Implements the Sprint 1 scope from [docs/16](../docs/16-mvp-scope-and-build-plan.md):
+Implements the Sprint 1–2 scope from [docs/16](../docs/16-mvp-scope-and-build-plan.md):
 tenant-isolated Postgres schema, tamper-evident audit log, signal registry +
 deterministic engine, explained renewal-risk score, evidence/citation store,
-JWT-authenticated API, and the Acme Corp demo seed.
+JWT-authenticated API, the Acme Corp demo seed, the connector framework with
+HubSpot + Stripe connectors, and identity resolution v1 with a human review
+queue.
 
 ## Layout
 
@@ -17,10 +19,30 @@ rig/audit.py               audit writer + hash-chain verifier
 rig/signals/definitions/   versioned YAML signal specs (docs/07 format)
 rig/signals/engine.py      detectors + idempotent persistence + evidence binding
 rig/scoring.py             renewal_risk@v0.1 — explained, reproducible composite
-rig/main.py                FastAPI app (accounts, risk explanation, evaluate)
+rig/main.py                FastAPI app (accounts, risk explanation, evaluate,
+                           sources, identity review queue)
 rig/seed.py                NorthstarCloud/Acme fixtures (docs/20 walkthrough)
-tests/                     RLS leak gate, audit chain, engine, scoring, API
+rig/resolution.py          identity resolution: explicit→domain→fuzzy ladder,
+                           confidence bands, review queue, human accept/reject
+rig/connectors/base.py     SyncRunner: sync_run bookkeeping, raw landing,
+                           per-stream cursors, failure capture
+rig/connectors/hubspot.py  companies/contacts/deals (primary CRM — may mint
+                           accounts); HTTP client behind a protocol
+rig/connectors/stripe.py   customers/invoices (secondary — defers unmatched
+                           records until a human resolves identity)
+tests/                     RLS leak gate, audit chain, engine, scoring, API,
+                           resolution, connector sync semantics
 ```
+
+## Identity resolution contract
+
+- Match ladder: explicit source_link → domain (0.98) → fuzzy name.
+- ≥0.95 auto-links; 0.70–0.95 queues an `identity_candidate` for human review;
+  below that, primary sources (CRM) mint a canonical account, secondary
+  sources (billing/support) always queue — they never create accounts.
+- Records depending on unresolved identities (e.g. Stripe invoices) are
+  **deferred**, not dropped: raw payloads are retained and attach on the next
+  sync after a human accepts the candidate.
 
 ## Security invariants enforced in code (not convention)
 
