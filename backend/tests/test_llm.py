@@ -75,6 +75,25 @@ def test_gateway_fails_closed_after_retry(seeded):
     assert statuses == ["invalid", "invalid"]
 
 
+def test_gateway_caches_identical_requests(seeded):
+    tid = seeded["nsc_tenant"]
+    schema = {"type": "object", "required": ["label"], "additionalProperties": False,
+              "properties": {"label": {"enum": ["a", "b"]}}}
+    client = FixtureLLMClient([{"label": "b"}, {"label": "a"}])
+    gateway = LLMGateway(client)
+    with tenant_session(tid) as s:
+        first, _ = gateway.run(s, tid, task="test_cache", prompt_version="t@v1",
+                               system="s", user="same input", schema=schema)
+        second, _ = gateway.run(s, tid, task="test_cache", prompt_version="t@v1",
+                                system="s", user="same input", schema=schema)
+        statuses = s.execute(text(
+            "SELECT status FROM ai_model_run WHERE task = 'test_cache' ORDER BY created_at"
+        )).scalars().all()
+    assert first == second == {"label": "b"}
+    assert len(client.calls) == 1          # provider hit exactly once
+    assert statuses == ["ok", "cached"]
+
+
 def test_gateway_enforces_budget(seeded):
     tid = seeded["nsc_tenant"]
     gateway = LLMGateway(FixtureLLMClient([{"label": "a"}]))
@@ -102,7 +121,7 @@ def test_sentiment_rejects_fabricated_quote(seeded):
     fabricated = {"overall": "negative",
                   "aspects": [{"topic": "pricing", "polarity": "negative",
                                "quote": "this text never appeared in the ticket"}]}
-    gateway = LLMGateway(FixtureLLMClient([fabricated, fabricated]))
+    gateway = LLMGateway(FixtureLLMClient([fabricated, fabricated]), use_cache=False)
     with tenant_session(tid) as s:
         ticket_id = _acme_ticket_id(s, seeded)
         with pytest.raises(LLMOutputInvalid, match="verbatim"):
@@ -191,7 +210,7 @@ def test_narrative_rejects_unknown_citation(seeded):
         insight_id = upsert_risk_insight(s, tid, seeded["acme_account"], score)
         bad = {"sentences": [{"sentence": "Cites evidence that does not exist in the menu.",
                               "evidence_ids": ["E999"]}]}
-        gateway = LLMGateway(FixtureLLMClient([bad, bad]))
+        gateway = LLMGateway(FixtureLLMClient([bad, bad]), use_cache=False)
         with pytest.raises(LLMOutputInvalid, match="unknown evidence ids"):
             generate_insight_narrative(s, tid, gateway, str(insight_id))
         # deterministic narrative untouched

@@ -408,6 +408,69 @@ def generate_narrative(
 
 
 # ---------------------------------------------------------------------------
+# Executive briefs
+# ---------------------------------------------------------------------------
+
+@app.post("/v1/briefs/generate")
+def create_brief(
+    as_of: date | None = Query(default=None),
+    principal: Principal = Depends(require("admin:evaluate")),
+):
+    from .briefing import generate_brief
+
+    with tenant_session(principal.tenant_id) as session:
+        brief_id = generate_brief(session, str(principal.tenant_id),
+                                  created_by=principal.user_id, as_of=as_of)
+        return {"brief_id": brief_id, "state": "draft"}
+
+
+@app.get("/v1/briefs/{brief_id}")
+def get_brief(brief_id: UUID, principal: Principal = Depends(require("accounts:read"))):
+    with tenant_session(principal.tenant_id) as session:
+        brief = session.execute(text(
+            "SELECT * FROM exec_brief WHERE id = :id"
+        ), {"id": str(brief_id)}).mappings().one_or_none()
+        if brief is None:
+            raise HTTPException(status_code=404, detail="brief not found")
+        return {"brief": dict(brief)}
+
+
+@app.post("/v1/briefs/{brief_id}/approve")
+def approve_exec_brief(
+    brief_id: UUID,
+    principal: Principal = Depends(require("admin:evaluate")),
+):
+    from .briefing import BriefError, approve_brief
+
+    with tenant_session(principal.tenant_id) as session:
+        try:
+            return approve_brief(session, str(principal.tenant_id), str(brief_id),
+                                 approved_by=principal.user_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except BriefError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/v1/briefs/{brief_id}/distribute")
+def distribute_exec_brief(
+    brief_id: UUID,
+    targets: list[dict],
+    principal: Principal = Depends(require("admin:evaluate")),
+):
+    from .briefing import BriefError, distribute_brief
+
+    with tenant_session(principal.tenant_id) as session:
+        try:
+            return distribute_brief(session, str(principal.tenant_id), str(brief_id),
+                                    actor_id=principal.user_id, targets=targets)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except BriefError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
 # Data quality + usage import
 # ---------------------------------------------------------------------------
 

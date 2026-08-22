@@ -22,6 +22,8 @@ TENANT_TABLES = [
     "insight", "insight_transition", "feedback_event", "data_quality_issue",
     # 0004
     "writeback_request", "notification", "ai_model_run",
+    # 0005
+    "exec_brief",
 ]
 
 

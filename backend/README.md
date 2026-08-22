@@ -1,4 +1,4 @@
-# RIG Backend — Sprints 1–4
+# RIG Backend — Sprints 1–5 (MVP backend complete)
 
 Implements the Sprint 1–3 scope from [docs/16](../docs/16-mvp-scope-and-build-plan.md):
 tenant-isolated Postgres schema, tamper-evident audit log, signal registry +
@@ -28,6 +28,17 @@ classification (review-gated), and citation-bound insight narratives.
 4. **External writes are approval-gated**: propose (with preview diff) →
    approve → execute (idempotent), audited at every step; rejection is
    terminal.
+5. **The executive brief cannot publish an unverified claim**: every claim is
+   verified (citation existence, numeric allowlist from the metrics layer,
+   claim-class, evidence freshness) at generation AND re-verified at
+   approval; unsupported claims live only in the excluded appendix, and
+   unconfirmed LLM findings appear only in a pending-review appendix.
+6. **Zero-hallucination CI gate** (`tests/test_zero_hallucination_gate.py`):
+   an adversarial suite pushes fabricated quotes, invented citations, and
+   unbacked numbers at the validators on every commit — any escape fails the
+   build. Live-model quality evals live in `rig/evals/model_eval.py`
+   (`python -m rig.evals.model_eval`, needs Anthropic credentials) with the
+   golden set in `evals/sentiment_golden.jsonl`.
 
 ## Layout
 

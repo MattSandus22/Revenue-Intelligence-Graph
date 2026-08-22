@@ -56,8 +56,11 @@ class LLMClient(Protocol):
 
 
 class LLMGateway:
-    def __init__(self, client: LLMClient):
+    def __init__(self, client: LLMClient, use_cache: bool = True):
         self.client = client
+        # Eval/adversarial runs disable the cache: they test the live
+        # validation path, and a cached valid output would mask it.
+        self.use_cache = use_cache
 
     def run(
         self,
@@ -78,6 +81,19 @@ class LLMGateway:
         """
         input_hash = hashlib.sha256(f"{system}|{user}|{json.dumps(schema, sort_keys=True)}"
                                     .encode()).hexdigest()
+
+        # Response cache keyed on the full input hash — identical requests
+        # (same task, prompt version, inputs) reuse the validated output.
+        # Major cost lever (docs/13); only status='ok' runs are cacheable.
+        cached = None if not self.use_cache else session.execute(text(
+            "SELECT id, output, model_id FROM ai_model_run"
+            " WHERE task = :task AND prompt_version = :pv AND input_hash = :ih"
+            " AND status = 'ok' ORDER BY created_at DESC LIMIT 1"
+        ), {"task": task, "pv": prompt_version, "ih": input_hash}).mappings().one_or_none()
+        if cached is not None:
+            run_id = self._log(session, tenant_id, task, prompt_version, cached["model_id"],
+                               input_hash, dict(cached["output"]), "cached", None, 0, 0, 0)
+            return dict(cached["output"]), run_id
 
         budget = self._daily_budget(session, tenant_id)
         spent = session.execute(text(

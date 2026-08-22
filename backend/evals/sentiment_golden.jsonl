@@ -1,0 +1,10 @@
+{"id": "g01", "text": "Subject: Sync failing again\nThis is the third time this month the carrier sync has broken. My team has stopped trusting the reports entirely.", "expected_overall": "negative", "expected_topics": ["product"]}
+{"id": "g02", "text": "Subject: Question about seat limits\nHi, quick question - how do we add two more seats to our plan? Thanks!", "expected_overall": "neutral", "expected_topics": []}
+{"id": "g03", "text": "Subject: Renewal pricing\nHonestly the new pricing feels steep. CompetitorX quoted us 30% less and finance is pushing me to justify every line item.", "expected_overall": "negative", "expected_topics": ["pricing"]}
+{"id": "g04", "text": "Subject: Thank you!\nThe new dashboard saved my team hours this week. Really impressive release.", "expected_overall": "positive", "expected_topics": ["product"]}
+{"id": "g05", "text": "Subject: Support experience\nYour support engineer resolved our issue in twenty minutes. Fantastic service as always.", "expected_overall": "positive", "expected_topics": ["support"]}
+{"id": "g06", "text": "Subject: Escalation - data loss\nWe lost a full day of shipment data and nobody has responded to our ticket in 48 hours. This is unacceptable for what we pay.", "expected_overall": "very_negative", "expected_topics": ["support"]}
+{"id": "g07", "text": "Subject: API docs\nWhere can I find the webhook signature documentation?", "expected_overall": "neutral", "expected_topics": []}
+{"id": "g08", "text": "Subject: Roadmap check-in\nDisappointed the EU data residency feature slipped another quarter. It is becoming a blocker for our compliance team.", "expected_overall": "negative", "expected_topics": ["roadmap"]}
+{"id": "g09", "text": "Subject: Invoice discrepancy\nOur invoice shows 120 seats but we only have 100 provisioned. Please correct before we can process payment.", "expected_overall": "neutral", "expected_topics": []}
+{"id": "g10", "text": "Subject: Great QBR\nReally valuable session yesterday - the adoption benchmarks changed how our leadership sees the tool.", "expected_overall": "positive", "expected_topics": ["relationship"]}
