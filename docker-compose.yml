@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_DB: rig_test
+    ports:
+      - "55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  api:
+    build: ./backend
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: postgresql+psycopg://rig_app:rig_app@postgres:5432/rig_test
+      ADMIN_DATABASE_URL: postgresql+psycopg://postgres@postgres:5432/rig_test
+    command: >
+      sh -c "python -m rig.seed &&
+             uvicorn rig.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:

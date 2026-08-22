@@ -1,0 +1,12 @@
+signal: notice_period_approaching  # C2
+version: 1
+category: commercial
+class: det
+detector: detect_notice_period_approaching
+business_meaning: Contract notice deadline within the alert window.
+params:
+  window_days: 45
+severity:
+  default: high
+requires_review: false
+suggested_actions: [renewal_owner_alert]

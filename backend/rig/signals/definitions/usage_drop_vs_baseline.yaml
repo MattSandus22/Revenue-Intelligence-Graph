@@ -1,0 +1,18 @@
+signal: usage_drop_vs_baseline     # U1 (statistical-lite for MVP)
+version: 1
+category: product_usage
+class: stat
+detector: detect_usage_drop_vs_baseline
+business_meaning: Sustained usage decline vs. the account's own 90-day baseline.
+params:
+  baseline_days: 90
+  observe_days: 14
+  min_history_days: 30
+  min_baseline_value: 20           # denominator floor (FP prevention)
+  drop_threshold_pct: 20
+severity:
+  medium_below_pct: 20             # 20-30% -> medium
+  high_below_pct: 30               # 30-50% -> high
+  critical_below_pct: 50           # >50%  -> critical
+requires_review: false
+suggested_actions: [usage_review_call, champion_checkin]

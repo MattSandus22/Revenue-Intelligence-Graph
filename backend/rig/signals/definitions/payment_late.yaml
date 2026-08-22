@@ -1,0 +1,13 @@
+signal: payment_late               # C3
+version: 1
+category: billing
+class: det
+detector: detect_payment_late
+business_meaning: Invoice overdue beyond grace thresholds.
+params:
+  medium_days: 7
+  high_days: 21
+severity:
+  default: medium
+requires_review: false
+suggested_actions: [finance_coordination, csm_heads_up]

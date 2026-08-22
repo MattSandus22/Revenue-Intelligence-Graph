@@ -1,0 +1,343 @@
+"""Deterministic/statistical signal engine (Sprint 1 detectors).
+
+Every detection returns evidence descriptors; the engine persists
+evidence_object rows and binds evidence_citation rows to the signal — a signal
+without evidence cannot exist, by construction (doc 10).
+
+Idempotency: signals are keyed on (tenant, account, signal_type, semantic_key).
+Re-evaluation updates magnitude/severity and increments occurrence_count;
+detections that no longer hold are transitioned to state 'resolved'.
+"""
+
+import hashlib
+import json
+import statistics
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
+from uuid import UUID
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from .registry import SignalDefinition, load_registry
+
+
+@dataclass
+class EvidenceSpec:
+    kind: str
+    source_system: str
+    source_record_id: str
+    statement: str            # rendered claim, always claim_class=observed_fact here
+    event_at: datetime
+    content_ref: dict = field(default_factory=dict)
+
+
+@dataclass
+class Detection:
+    semantic_key: str
+    severity: str
+    confidence: float
+    magnitude: dict
+    rationale: str
+    evidence: list[EvidenceSpec]
+
+
+# ---------------------------------------------------------------------------
+# Detectors. Each receives (session, account_row, params, today) and returns
+# a list of Detection. Account row is a mapping of the account table columns.
+# ---------------------------------------------------------------------------
+
+def detect_renewal_no_plan(session: Session, account, params: dict, today: date) -> list[Detection]:
+    renewal = account["renewal_date"]
+    if renewal is None:
+        return []
+    days_to_renewal = (renewal - today).days
+    if not (0 <= days_to_renewal <= params["window_days"]) or account["plan_status"] == "active":
+        return []
+    severity = "medium" if account["auto_renew"] else "high"
+    return [Detection(
+        semantic_key=f"renewal:{renewal.isoformat()}",
+        severity=severity,
+        confidence=1.0,
+        magnitude={"days_to_renewal": days_to_renewal, "plan_status": account["plan_status"]},
+        rationale=(
+            f"Renewal due {renewal.isoformat()} ({days_to_renewal} days) with no active account plan"
+        ),
+        evidence=[EvidenceSpec(
+            kind="crm_field",
+            source_system="crm",
+            source_record_id=f"account:{account['id']}:renewal_date",
+            statement=f"Renewal date {renewal.isoformat()}; account plan status '{account['plan_status']}'",
+            event_at=datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc),
+        )],
+    )]
+
+
+def detect_notice_period_approaching(session: Session, account, params: dict, today: date) -> list[Detection]:
+    renewal, notice_days = account["renewal_date"], account["notice_days"]
+    if renewal is None or notice_days is None:
+        return []
+    deadline = renewal - timedelta(days=notice_days)
+    days_to_deadline = (deadline - today).days
+    if not (0 <= days_to_deadline <= params["window_days"]):
+        return []
+    return [Detection(
+        semantic_key=f"notice:{deadline.isoformat()}",
+        severity="high",
+        confidence=1.0,
+        magnitude={"notice_deadline": deadline.isoformat(), "days_to_deadline": days_to_deadline},
+        rationale=f"Contract notice deadline {deadline.isoformat()} is {days_to_deadline} days away",
+        evidence=[EvidenceSpec(
+            kind="crm_field",
+            source_system="crm",
+            source_record_id=f"account:{account['id']}:notice_terms",
+            statement=(
+                f"Contract requires {notice_days}-day notice before renewal {renewal.isoformat()}"
+                f" — deadline {deadline.isoformat()}"
+            ),
+            event_at=datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc),
+        )],
+    )]
+
+
+def detect_payment_late(session: Session, account, params: dict, today: date) -> list[Detection]:
+    rows = session.execute(text(
+        "SELECT source_system, source_record_id, amount_cents, due_at, status"
+        " FROM invoice WHERE account_id = :aid AND paid_at IS NULL AND status IN ('open','overdue')"
+    ), {"aid": str(account["id"])}).mappings().all()
+    detections = []
+    for inv in rows:
+        days_past_due = (today - inv["due_at"]).days
+        if days_past_due < params["medium_days"]:
+            continue
+        severity = "high" if days_past_due >= params["high_days"] else "medium"
+        detections.append(Detection(
+            semantic_key=f"invoice:{inv['source_record_id']}",
+            severity=severity,
+            confidence=1.0,
+            magnitude={"days_past_due": days_past_due, "amount_cents": inv["amount_cents"]},
+            rationale=(
+                f"Invoice {inv['source_record_id']} (${inv['amount_cents'] / 100:,.0f})"
+                f" is {days_past_due} days past due"
+            ),
+            evidence=[EvidenceSpec(
+                kind="billing_event",
+                source_system=inv["source_system"],
+                source_record_id=inv["source_record_id"],
+                statement=(
+                    f"Invoice {inv['source_record_id']} due {inv['due_at'].isoformat()},"
+                    f" unpaid, {days_past_due} days overdue"
+                ),
+                event_at=datetime.combine(inv["due_at"], datetime.min.time(), tzinfo=timezone.utc),
+            )],
+        ))
+    return detections
+
+
+def detect_critical_ticket_unresolved(session: Session, account, params: dict, today: date) -> list[Detection]:
+    now = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+    rows = session.execute(text(
+        "SELECT source_system, source_record_id, subject, priority, opened_at, escalated"
+        " FROM support_ticket WHERE account_id = :aid AND resolved_at IS NULL"
+        " AND status IN ('open','pending') AND priority IN ('high','critical')"
+    ), {"aid": str(account["id"])}).mappings().all()
+    detections = []
+    for t in rows:
+        age_hours = (now - t["opened_at"]).total_seconds() / 3600
+        if age_hours <= params["sla_hours"]:
+            continue
+        severity = "critical" if account["tier"] in ("Strategic", "Enterprise") else "high"
+        detections.append(Detection(
+            semantic_key=f"ticket:{t['source_record_id']}",
+            severity=severity,
+            confidence=1.0,
+            magnitude={"age_days": round(age_hours / 24, 1), "priority": t["priority"], "escalated": t["escalated"]},
+            rationale=(
+                f"{t['priority'].capitalize()} ticket '{t['subject']}' open"
+                f" {age_hours / 24:.0f} days (SLA {params['sla_hours']}h)"
+            ),
+            evidence=[EvidenceSpec(
+                kind="ticket",
+                source_system=t["source_system"],
+                source_record_id=t["source_record_id"],
+                statement=(
+                    f"Ticket {t['source_record_id']} ({t['priority']}) opened"
+                    f" {t['opened_at'].date().isoformat()}, still unresolved"
+                ),
+                event_at=t["opened_at"],
+            )],
+        ))
+    return detections
+
+
+def detect_usage_drop_vs_baseline(session: Session, account, params: dict, today: date) -> list[Detection]:
+    baseline_start = today - timedelta(days=params["baseline_days"])
+    observe_start = today - timedelta(days=params["observe_days"])
+    rows = session.execute(text(
+        "SELECT metric, date, value FROM usage_metric_daily"
+        " WHERE account_id = :aid AND date >= :start ORDER BY metric, date"
+    ), {"aid": str(account["id"]), "start": baseline_start}).mappings().all()
+
+    by_metric: dict[str, list] = {}
+    for r in rows:
+        by_metric.setdefault(r["metric"], []).append(r)
+
+    detections = []
+    for metric, series in by_metric.items():
+        baseline_vals = [float(r["value"]) for r in series if r["date"] < observe_start]
+        observe_vals = [float(r["value"]) for r in series if r["date"] >= observe_start]
+        if len(baseline_vals) < params["min_history_days"] or not observe_vals:
+            continue
+        baseline = statistics.median(baseline_vals)
+        if baseline < params["min_baseline_value"]:  # denominator floor
+            continue
+        current = statistics.fmean(observe_vals)
+        drop_pct = (baseline - current) / baseline * 100
+        if drop_pct < params["drop_threshold_pct"]:
+            continue
+        self_severity = "medium"
+        severity_cfg = params.get("severity") or {}
+        if drop_pct >= severity_cfg.get("critical_below_pct", 50):
+            self_severity = "critical"
+        elif drop_pct >= severity_cfg.get("high_below_pct", 30):
+            self_severity = "high"
+        detections.append(Detection(
+            semantic_key=f"metric:{metric}",
+            severity=self_severity,
+            confidence=0.94,
+            magnitude={
+                "metric": metric,
+                "baseline": round(baseline, 1),
+                "current_14d_mean": round(current, 1),
+                "drop_pct": round(drop_pct, 1),
+            },
+            rationale=(
+                f"{metric} down {drop_pct:.0f}% vs {params['baseline_days']}-day baseline"
+                f" ({baseline:.0f} → {current:.0f}/day)"
+            ),
+            evidence=[EvidenceSpec(
+                kind="usage_metric",
+                source_system="usage_warehouse",
+                source_record_id=f"metric:{metric}:{account['id']}",
+                statement=(
+                    f"{metric}: trailing {params['observe_days']}d mean {current:.0f}/day vs"
+                    f" {params['baseline_days']}d baseline {baseline:.0f}/day ({drop_pct:.0f}% drop)"
+                ),
+                event_at=datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc),
+                content_ref={"window": f"{params['baseline_days']}d", "observe": f"{params['observe_days']}d"},
+            )],
+        ))
+    return detections
+
+
+DETECTORS = {
+    "detect_renewal_no_plan": detect_renewal_no_plan,
+    "detect_notice_period_approaching": detect_notice_period_approaching,
+    "detect_payment_late": detect_payment_late,
+    "detect_critical_ticket_unresolved": detect_critical_ticket_unresolved,
+    "detect_usage_drop_vs_baseline": detect_usage_drop_vs_baseline,
+}
+
+
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
+
+def _upsert_evidence(session: Session, tenant_id: str, account_id: str, spec: EvidenceSpec) -> UUID:
+    content_hash = hashlib.sha256(
+        f"{spec.statement}|{spec.source_system}|{spec.source_record_id}".encode()
+    ).hexdigest()
+    row = session.execute(text(
+        "INSERT INTO evidence_object"
+        " (tenant_id, account_id, kind, source_system, source_record_id, statement,"
+        "  content_ref, event_at, hash)"
+        " VALUES (:tid, :aid, :kind, :src, :rec, :stmt, CAST(:ref AS jsonb), :at, :hash)"
+        " ON CONFLICT (tenant_id, kind, source_system, source_record_id, hash)"
+        " DO UPDATE SET freshness_at = now()"
+        " RETURNING id"
+    ), {
+        "tid": tenant_id, "aid": account_id, "kind": spec.kind,
+        "src": spec.source_system, "rec": spec.source_record_id,
+        "stmt": spec.statement, "ref": json.dumps(spec.content_ref),
+        "at": spec.event_at, "hash": content_hash,
+    }).scalar_one()
+    return row
+
+
+def evaluate_account(
+    session: Session,
+    tenant_id: UUID | str,
+    account_id: UUID | str,
+    today: date | None = None,
+    registry: dict[str, SignalDefinition] | None = None,
+) -> dict:
+    """Run all registered detectors for one account. Returns a summary dict."""
+    today = today or datetime.now(timezone.utc).date()
+    registry = registry or load_registry()
+    tenant_id, account_id = str(tenant_id), str(account_id)
+
+    account = session.execute(
+        text("SELECT * FROM account WHERE id = :aid AND deleted_at IS NULL"),
+        {"aid": account_id},
+    ).mappings().one_or_none()
+    if account is None:
+        raise ValueError(f"account {account_id} not found in tenant context")
+
+    active_keys: set[tuple[str, str]] = set()
+    created, updated = 0, 0
+
+    for definition in registry.values():
+        detector = DETECTORS[definition.detector]
+        for detection in detector(session, account, {**definition.params, "severity": definition.severity}, today):
+            active_keys.add((definition.signal, detection.semantic_key))
+            result = session.execute(text(
+                "INSERT INTO signal"
+                " (tenant_id, account_id, signal_type, detector_class, detector_version,"
+                "  semantic_key, severity, confidence, magnitude, rationale, requires_review)"
+                " VALUES (:tid, :aid, :type, :cls, :ver, :key, :sev, :conf,"
+                "         CAST(:mag AS jsonb), :rat, :rev)"
+                " ON CONFLICT (tenant_id, account_id, signal_type, semantic_key)"
+                " DO UPDATE SET severity = EXCLUDED.severity, confidence = EXCLUDED.confidence,"
+                "   magnitude = EXCLUDED.magnitude, rationale = EXCLUDED.rationale,"
+                "   state = 'active', occurrence_count = signal.occurrence_count + 1,"
+                "   last_evaluated_at = now()"
+                " RETURNING id, (occurrence_count = 1) AS is_new"
+            ), {
+                "tid": tenant_id, "aid": account_id, "type": definition.signal,
+                "cls": definition.detector_class, "ver": definition.detector_version,
+                "key": detection.semantic_key, "sev": detection.severity,
+                "conf": detection.confidence, "mag": json.dumps(detection.magnitude),
+                "rat": detection.rationale, "rev": definition.requires_review,
+            }).mappings().one()
+            signal_id, is_new = result["id"], result["is_new"]
+            created += int(is_new)
+            updated += int(not is_new)
+
+            for spec in detection.evidence:
+                evidence_id = _upsert_evidence(session, tenant_id, account_id, spec)
+                session.execute(text(
+                    "INSERT INTO evidence_citation"
+                    " (tenant_id, evidence_id, claim_owner_type, claim_owner_id, claim_text, claim_class)"
+                    " SELECT :tid, :eid, 'signal', :sid, :claim, 'observed_fact'"
+                    " WHERE NOT EXISTS (SELECT 1 FROM evidence_citation"
+                    "   WHERE tenant_id = :tid AND evidence_id = :eid"
+                    "   AND claim_owner_type = 'signal' AND claim_owner_id = :sid)"
+                ), {"tid": tenant_id, "eid": str(evidence_id), "sid": str(signal_id),
+                    "claim": detection.rationale})
+
+    # Resolve signals that no longer detect (never delete: needed for FN analysis).
+    existing = session.execute(text(
+        "SELECT id, signal_type, semantic_key FROM signal"
+        " WHERE account_id = :aid AND state = 'active'"
+    ), {"aid": account_id}).mappings().all()
+    resolved = 0
+    for row in existing:
+        if (row["signal_type"], row["semantic_key"]) not in active_keys:
+            session.execute(
+                text("UPDATE signal SET state = 'resolved', last_evaluated_at = now() WHERE id = :id"),
+                {"id": str(row["id"])},
+            )
+            resolved += 1
+
+    return {"account_id": account_id, "created": created, "updated": updated,
+            "resolved": resolved, "active": len(active_keys), "as_of": today.isoformat()}

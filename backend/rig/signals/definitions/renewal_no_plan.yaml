@@ -1,0 +1,13 @@
+signal: renewal_no_plan            # C1
+version: 1
+category: commercial
+class: det
+detector: detect_renewal_no_plan
+business_meaning: Renewal within window with no active account plan.
+params:
+  window_days: 120
+severity:
+  default: high
+  auto_renew: medium               # auto-renew contracts tracked at lower severity
+requires_review: false
+suggested_actions: [create_account_plan, assign_renewal_owner]

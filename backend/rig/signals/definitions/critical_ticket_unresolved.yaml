@@ -1,0 +1,13 @@
+signal: critical_ticket_unresolved # S2
+version: 1
+category: support
+class: det
+detector: detect_critical_ticket_unresolved
+business_meaning: High/critical severity ticket open past SLA.
+params:
+  sla_hours: 72
+severity:
+  default: high
+  strategic_tier: critical         # tier bump per doc 7 conventions
+requires_review: false
+suggested_actions: [escalate_support, comms_play]
