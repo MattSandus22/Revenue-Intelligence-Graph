@@ -20,10 +20,51 @@ from .signals.engine import evaluate_account
 
 app = FastAPI(title="Revenue Intelligence Graph", version="0.1.0")
 
+# Dev CORS for the Vite frontend; production serves same-origin behind the LB.
+import os as _os
+
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_os.environ.get("RIG_CORS_ORIGINS", "http://localhost:5173").split(","),
+    allow_methods=["*"], allow_headers=["*"],
+)
+
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Dev login (ONLY when RIG_DEV_LOGIN=1; production uses OIDC/WorkOS)
+# ---------------------------------------------------------------------------
+
+def _dev_login_enabled():
+    if _os.environ.get("RIG_DEV_LOGIN") != "1":
+        raise HTTPException(status_code=404, detail="not found")
+
+
+@app.get("/v1/dev/tenants")
+def dev_tenants():
+    _dev_login_enabled()
+    from .migrate import admin_engine
+
+    with admin_engine.connect() as conn:
+        rows = conn.execute(text("SELECT id, name FROM tenant ORDER BY created_at")).all()
+    return {"tenants": [{"id": str(r[0]), "name": r[1]} for r in rows]}
+
+
+@app.post("/v1/dev/token")
+def dev_token(tenant_id: UUID, role: str = Query(...), user: str = Query(default="dev-user")):
+    _dev_login_enabled()
+    from .auth import CAPABILITIES, issue_dev_token
+
+    if role not in CAPABILITIES:
+        raise HTTPException(status_code=422, detail=f"role must be one of {sorted(CAPABILITIES)}")
+    return {"token": issue_dev_token(user, tenant_id, role), "role": role,
+            "tenant_id": str(tenant_id)}
 
 
 @app.get("/v1/accounts")
@@ -57,6 +98,36 @@ def get_account(account_id: UUID, principal: Principal = Depends(require("accoun
             object_type="account", object_id=str(account_id),
         )
         return {"account": dict(account), "active_signals": [dict(s) for s in signals]}
+
+
+@app.get("/v1/accounts/{account_id}/timeline")
+def get_timeline(account_id: UUID, principal: Principal = Depends(require("accounts:read"))):
+    """Unified account timeline: signals, billing, support, score snapshots."""
+    with tenant_session(principal.tenant_id) as session:
+        exists = session.execute(
+            text("SELECT 1 FROM account WHERE id = :aid AND deleted_at IS NULL"),
+            {"aid": str(account_id)}).scalar_one_or_none()
+        if not exists:
+            raise HTTPException(status_code=404, detail="account not found")
+        events = session.execute(text(
+            "SELECT * FROM ("
+            "  SELECT 'signal' AS kind, first_detected_at AS at, rationale AS title,"
+            "    severity AS detail, detector_class AS source, state AS status"
+            "  FROM signal WHERE account_id = :aid"
+            "  UNION ALL"
+            "  SELECT 'invoice', due_at::timestamptz, 'Invoice ' || source_record_id ||"
+            "    ' due ($' || (amount_cents/100)::text || ')', status, source_system, status"
+            "  FROM invoice WHERE account_id = :aid"
+            "  UNION ALL"
+            "  SELECT 'ticket', opened_at, subject, priority, source_system, status"
+            "  FROM support_ticket WHERE account_id = :aid"
+            "  UNION ALL"
+            "  SELECT 'score', as_of, 'Renewal risk ' || round(value)::text || '/100',"
+            "    score_version, 'rig', 'computed'"
+            "  FROM score WHERE account_id = :aid AND score_type = 'renewal_risk'"
+            ") t ORDER BY at DESC LIMIT 200"
+        ), {"aid": str(account_id)}).mappings().all()
+        return {"events": [dict(e) for e in events]}
 
 
 @app.get("/v1/accounts/{account_id}/risk")

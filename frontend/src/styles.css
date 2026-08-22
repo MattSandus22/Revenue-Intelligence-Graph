@@ -1,0 +1,107 @@
+/* RIG design tokens — docs/14 visual philosophy: dense, evidence-first,
+   enterprise-grade, no AI sparkle. Severity/claim classes never rely on
+   color alone (icon/shape + label always present). */
+
+:root {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --border: #d9dee5;
+  --text: #1a2330;
+  --text-dim: #5b6675;
+  --accent: #1f5eff;
+  --critical: #b3261e;
+  --high: #b45309;
+  --medium: #8a6d00;
+  --low: #3f6212;
+  --ok: #1e7a46;
+  --radius: 6px;
+  --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  color: var(--text);
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.layout { display: flex; min-height: 100vh; }
+.sidenav {
+  width: 208px; background: #101827; color: #cbd5e1; padding: 16px 0;
+  display: flex; flex-direction: column; gap: 2px; flex-shrink: 0;
+}
+.sidenav .brand { color: #fff; font-weight: 700; padding: 4px 20px 16px; font-size: 15px; }
+.sidenav a { color: #cbd5e1; padding: 8px 20px; display: block; }
+.sidenav a.active { background: #1e293b; color: #fff; border-left: 3px solid var(--accent); padding-left: 17px; }
+.sidenav a:hover { text-decoration: none; background: #182338; }
+.sidenav .whoami { margin-top: auto; padding: 12px 20px; font-size: 12px; color: #7c8aa0; border-top: 1px solid #1e293b; }
+
+.main { flex: 1; padding: 24px 32px; max-width: 1280px; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 24px 0 8px; }
+.subtitle { color: var(--text-dim); margin-bottom: 20px; }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
+}
+
+table.data { width: 100%; border-collapse: collapse; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius); }
+table.data th { text-align: left; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.03em; color: var(--text-dim); padding: 8px 12px;
+  border-bottom: 1px solid var(--border); background: #fbfcfd; }
+table.data td { padding: 9px 12px; border-bottom: 1px solid #edf0f4; vertical-align: top; }
+table.data tr.clickable { cursor: pointer; }
+table.data tr.clickable:hover { background: #f2f6ff; }
+
+/* Severity: icon + label, never color alone */
+.sev { font-weight: 600; font-size: 12px; white-space: nowrap; }
+.sev::before { margin-right: 4px; }
+.sev.critical { color: var(--critical); } .sev.critical::before { content: "⛔"; }
+.sev.high { color: var(--high); } .sev.high::before { content: "▲"; }
+.sev.medium { color: var(--medium); } .sev.medium::before { content: "◆"; }
+.sev.low, .sev.info { color: var(--low); } .sev.low::before, .sev.info::before { content: "○"; }
+
+/* Claim-class badges — shape + text (docs/10 §10.4) */
+.claim-badge { display: inline-block; font-size: 10px; font-weight: 700;
+  letter-spacing: 0.04em; padding: 1px 6px; border-radius: 3px; margin-right: 6px; }
+.claim-badge.observed_fact { background: #e6f4ec; color: var(--ok); border: 1px solid var(--ok); }
+.claim-badge.model_prediction { background: #eef2ff; color: var(--accent); border: 1px dashed var(--accent); }
+.claim-badge.ai_interpretation { background: #fdf3e7; color: var(--high); border: 1px dotted var(--high); }
+.claim-badge.recommendation { background: #f3f4f6; color: var(--text-dim); border: 1px solid var(--text-dim); }
+
+.chip { display: inline-block; background: #eef1f5; border-radius: 10px;
+  padding: 1px 8px; font-size: 12px; margin: 0 4px 4px 0; color: var(--text-dim); }
+.score-chip { display: inline-flex; align-items: baseline; gap: 6px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; }
+.score-chip .value { font-size: 18px; font-weight: 700; font-family: var(--mono); }
+.money { font-family: var(--mono); }
+
+button, .btn { background: var(--accent); color: #fff; border: none; border-radius: var(--radius);
+  padding: 6px 12px; font-size: 13px; cursor: pointer; }
+button.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+button.danger { background: var(--critical); }
+button:disabled { opacity: 0.5; cursor: default; }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+
+.drawer { position: fixed; top: 0; right: 0; width: 520px; height: 100vh;
+  background: var(--surface); border-left: 1px solid var(--border);
+  box-shadow: -6px 0 24px rgba(16, 24, 39, 0.12); padding: 20px; overflow-y: auto; z-index: 20; }
+.drawer .close { float: right; background: none; color: var(--text-dim); font-size: 18px; }
+
+.evidence-item { border-left: 3px solid var(--border); padding: 6px 10px; margin: 6px 0;
+  background: #fafbfc; font-size: 13px; }
+.evidence-item .meta { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
+
+.banner { border-radius: var(--radius); padding: 10px 14px; margin-bottom: 14px; font-size: 13px; }
+.banner.warn { background: #fdf3e7; border: 1px solid var(--high); color: var(--high); }
+.banner.error { background: #fdecea; border: 1px solid var(--critical); color: var(--critical); }
+.banner.info { background: #eef2ff; border: 1px solid var(--accent); color: var(--accent); }
+
+.empty { color: var(--text-dim); padding: 32px; text-align: center; }
+.mono { font-family: var(--mono); font-size: 12px; }
+label { display: block; font-size: 12px; color: var(--text-dim); margin: 10px 0 4px; }
+input, select { width: 100%; padding: 7px 9px; border: 1px solid var(--border);
+  border-radius: var(--radius); font-size: 13px; }
