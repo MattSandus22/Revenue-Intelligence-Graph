@@ -331,11 +331,15 @@ def evaluate_account(
                 ), {"tid": tenant_id, "eid": str(evidence_id), "sid": str(signal_id),
                     "claim": detection.rationale})
 
-    # Resolve signals that no longer detect (never delete: needed for FN analysis).
+    # Resolve signals that no longer detect (never delete: needed for FN
+    # analysis). Scoped to types this engine manages — LLM-derived signals
+    # (e.g. negative_sentiment) have their own lifecycle and must not be
+    # auto-resolved by detectors that know nothing about them.
     existing = session.execute(text(
         "SELECT id, signal_type, semantic_key FROM signal"
         " WHERE account_id = :aid AND state = 'active'"
-    ), {"aid": account_id}).mappings().all()
+        " AND signal_type = ANY(:managed)"
+    ), {"aid": account_id, "managed": list(registry.keys())}).mappings().all()
     resolved = 0
     for row in existing:
         if (row["signal_type"], row["semantic_key"]) not in active_keys:

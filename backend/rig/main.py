@@ -183,6 +183,13 @@ def evaluate(
         insight_id = upsert_risk_insight(
             session, str(principal.tenant_id), str(account_id), score
         )
+        if insight_id is not None:
+            from . import notifications
+
+            notifications.notify_insight(
+                session, str(principal.tenant_id), str(insight_id),
+                notifications.default_slack_client,
+            )
         audit.record(
             session, tenant_id=principal.tenant_id, actor_type="user",
             actor_id=principal.user_id, action="signals.evaluate",
@@ -258,6 +265,146 @@ def insight_feedback(
         ), {"tid": str(principal.tenant_id), "sid": str(insight_id), "verdict": verdict,
             "comment": comment, "uid": principal.user_id})
         return {"status": "recorded"}
+
+
+# ---------------------------------------------------------------------------
+# LLM signal review, write-backs, generation triggers
+# ---------------------------------------------------------------------------
+
+@app.post("/v1/signals/{signal_id}/review")
+def review_signal(
+    signal_id: UUID,
+    outcome: str = Query(...),
+    principal: Principal = Depends(require("signals:review")),
+):
+    if outcome not in ("confirmed", "rejected"):
+        raise HTTPException(status_code=422, detail="outcome must be confirmed|rejected")
+    with tenant_session(principal.tenant_id) as session:
+        updated = session.execute(text(
+            "UPDATE signal SET review_outcome = :outcome, reviewed_by = :by,"
+            " reviewed_at = now() WHERE id = :id AND requires_review = true"
+        ), {"outcome": outcome, "by": principal.user_id, "id": str(signal_id)}).rowcount
+        if not updated:
+            raise HTTPException(status_code=404, detail="signal not found or not reviewable")
+        audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
+                     actor_id=principal.user_id, action="signal.review",
+                     object_type="signal", object_id=str(signal_id),
+                     payload={"outcome": outcome})
+        return {"status": outcome}
+
+
+@app.get("/v1/writebacks")
+def list_writebacks(principal: Principal = Depends(require("writeback:approve"))):
+    with tenant_session(principal.tenant_id) as session:
+        rows = session.execute(text(
+            "SELECT id, connector_type, operation, preview, state, proposed_by, approved_by,"
+            " error, created_at, executed_at FROM writeback_request"
+            " ORDER BY created_at DESC LIMIT 200"
+        )).mappings().all()
+        return {"writebacks": [dict(r) for r in rows]}
+
+
+@app.post("/v1/insights/{insight_id}/propose-task")
+def propose_insight_task(
+    insight_id: UUID,
+    title: str = Query(...),
+    due_date: str | None = Query(default=None),
+    principal: Principal = Depends(require("accounts:write")),
+):
+    from . import writeback
+
+    with tenant_session(principal.tenant_id) as session:
+        try:
+            request_id = writeback.propose_task(
+                session, str(principal.tenant_id), insight_id=str(insight_id),
+                title=title, due_date=due_date, proposed_by=principal.user_id,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"writeback_request_id": request_id, "state": "proposed",
+                "note": "requires approval before anything is written to the CRM"}
+
+
+@app.post("/v1/writebacks/{request_id}/approve")
+def approve_writeback(
+    request_id: UUID,
+    principal: Principal = Depends(require("writeback:approve")),
+):
+    from . import writeback
+
+    with tenant_session(principal.tenant_id) as session:
+        try:
+            writeback.approve(session, str(principal.tenant_id), request_id,
+                              approved_by=principal.user_id)
+            if writeback.default_write_client is not None:
+                result = writeback.execute(session, str(principal.tenant_id), request_id,
+                                           writeback.default_write_client,
+                                           actor_id=principal.user_id)
+                return {"state": "executed", "external_result": result}
+        except writeback.WritebackError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"state": "approved",
+                "note": "no write client configured; will execute when connector is live"}
+
+
+@app.post("/v1/writebacks/{request_id}/reject")
+def reject_writeback(
+    request_id: UUID,
+    reason: str | None = Query(default=None),
+    principal: Principal = Depends(require("writeback:approve")),
+):
+    from . import writeback
+
+    with tenant_session(principal.tenant_id) as session:
+        try:
+            writeback.reject(session, str(principal.tenant_id), request_id,
+                             rejected_by=principal.user_id, reason=reason)
+        except writeback.WritebackError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"state": "rejected"}
+
+
+@app.post("/v1/admin/tickets/{ticket_id}/analyze-sentiment")
+def analyze_sentiment(
+    ticket_id: UUID,
+    principal: Principal = Depends(require("admin:evaluate")),
+):
+    from .llm import gateway as llm_gateway
+    from .llm.sentiment import analyze_ticket_sentiment
+
+    if llm_gateway.default_gateway is None:
+        raise HTTPException(status_code=503, detail="LLM gateway not configured;"
+                            " generative features disabled")
+    with tenant_session(principal.tenant_id) as session:
+        try:
+            return analyze_ticket_sentiment(session, str(principal.tenant_id),
+                                            llm_gateway.default_gateway, str(ticket_id))
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except llm_gateway.LLMError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/v1/insights/{insight_id}/generate-narrative")
+def generate_narrative(
+    insight_id: UUID,
+    principal: Principal = Depends(require("accounts:write")),
+):
+    from .llm import gateway as llm_gateway
+    from .llm.narrative import generate_insight_narrative
+
+    if llm_gateway.default_gateway is None:
+        raise HTTPException(status_code=503, detail="LLM gateway not configured")
+    with tenant_session(principal.tenant_id) as session:
+        try:
+            return generate_insight_narrative(session, str(principal.tenant_id),
+                                              llm_gateway.default_gateway, str(insight_id))
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except llm_gateway.LLMError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-# RIG Backend — Sprints 1–3
+# RIG Backend — Sprints 1–4
 
 Implements the Sprint 1–3 scope from [docs/16](../docs/16-mvp-scope-and-build-plan.md):
 tenant-isolated Postgres schema, tamper-evident audit log, signal registry +
@@ -8,7 +8,26 @@ HubSpot + Stripe + Zendesk connectors, identity resolution v1 with a human
 review queue, CSV usage import with validation reports, data-quality
 monitoring v0 (freshness + hygiene, coupled to signal suppression), and the
 workbench backend: insight lifecycle state machine, deterministic urgency
-ranking, and feedback capture.
+ranking, and feedback capture. Sprint 4 adds the approval-gated write-back
+framework, the Slack notification layer, and the first LLM slice: a gateway
+with schema validation + budgets + full run logging, ticket sentiment
+classification (review-gated), and citation-bound insight narratives.
+
+## LLM invariants enforced in code
+
+1. **Every call goes through the gateway** (`rig/llm/gateway.py`): per-tenant
+   daily token budgets, strict JSON Schema validation with one retry then
+   fail-closed, every run logged to `ai_model_run` (model, prompt version,
+   hashes, tokens, status).
+2. **Anti-hallucination by construction**: sentiment quotes must be verbatim
+   substrings of the input; narratives cite only ids from an enumerated
+   evidence menu; uncited sentences are dropped, never published.
+3. **LLM signals never affect scores or executive surfaces until a human
+   confirms them** (`requires_review` + review endpoint); rejected runs leave
+   deterministic outputs untouched.
+4. **External writes are approval-gated**: propose (with preview diff) →
+   approve → execute (idempotent), audited at every step; rejection is
+   terminal.
 
 ## Layout
 

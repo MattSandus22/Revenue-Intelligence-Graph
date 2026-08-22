@@ -17,9 +17,11 @@ def _evaluate(seeded):
 
 
 def _active_signals(seeded):
+    """Engine-managed active signals (LLM signals have a separate lifecycle)."""
     with tenant_session(seeded["nsc_tenant"]) as s:
         return {r["signal_type"]: dict(r) for r in s.execute(text(
             "SELECT * FROM signal WHERE account_id = :aid AND state = 'active'"
+            " AND requires_review = false"
         ), {"aid": seeded["acme_account"]}).mappings().all()}
 
 

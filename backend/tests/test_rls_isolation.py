@@ -20,6 +20,8 @@ TENANT_TABLES = [
     "source_link", "identity_candidate",
     # 0003
     "insight", "insight_transition", "feedback_event", "data_quality_issue",
+    # 0004
+    "writeback_request", "notification", "ai_model_run",
 ]
 
 

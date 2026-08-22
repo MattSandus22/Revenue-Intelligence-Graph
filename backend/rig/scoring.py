@@ -22,10 +22,11 @@ SCORE_VERSION = "renewal_risk@v0.1"
 
 # component -> (weight, contributing signal types)
 COMPONENTS: dict[str, tuple[float, list[str]]] = {
-    "usage_trajectory": (0.30, ["usage_drop_vs_baseline"]),
+    "usage_trajectory": (0.25, ["usage_drop_vs_baseline"]),
     "support_friction": (0.20, ["critical_ticket_unresolved"]),
-    "commercial_engagement": (0.30, ["renewal_no_plan", "notice_period_approaching"]),
-    "billing_health": (0.20, ["payment_late"]),
+    "commercial_engagement": (0.25, ["renewal_no_plan", "notice_period_approaching"]),
+    "billing_health": (0.15, ["payment_late"]),
+    "sentiment_trend": (0.15, ["negative_sentiment"]),
 }
 
 SEVERITY_NORM = {"info": 0.1, "low": 0.25, "medium": 0.5, "high": 0.8, "critical": 1.0}
@@ -46,9 +47,12 @@ def compute_renewal_risk(
         if as_of else datetime.now(timezone.utc)
     )
 
+    # LLM-derived signals never affect scores until a human confirms them
+    # (docs/07 conventions, docs/09 principle 7).
     signals = session.execute(text(
         "SELECT id, signal_type, severity, confidence, rationale FROM signal"
         " WHERE account_id = :aid AND state = 'active'"
+        " AND (requires_review = false OR review_outcome = 'confirmed')"
     ), {"aid": account_id}).mappings().all()
     by_type: dict[str, list] = {}
     for s in signals:
@@ -69,6 +73,9 @@ def compute_renewal_risk(
         "support_friction": bool(has_support),
         "commercial_engagement": True,  # CRM fields always present for an account
         "billing_health": bool(has_billing),
+        # conversation coverage proxy: support text is the only conversation
+        # source until call transcripts land (V2)
+        "sentiment_trend": bool(has_support),
     }
 
     covered_weight = sum(w for name, (w, _) in COMPONENTS.items() if coverage[name])
