@@ -37,6 +37,46 @@ def health():
     return {"status": "ok"}
 
 
+# Generative features activate only when provider credentials are present;
+# without them RIG runs as a fully-functional deterministic product
+# (docs/12 AI-governance degraded mode).
+if _os.environ.get("ANTHROPIC_API_KEY"):
+    from .llm import gateway as _llm_gateway_module
+    from .llm.gateway import AnthropicLLMClient, LLMGateway as _LLMGateway
+
+    _llm_gateway_module.default_gateway = _LLMGateway(AnthropicLLMClient())
+
+
+# ---------------------------------------------------------------------------
+# Static SPA serving (production single-container mode).
+# If a frontend build exists (RIG_FRONTEND_DIST or ../frontend/dist), serve it
+# with an SPA fallback for non-API routes.
+# ---------------------------------------------------------------------------
+
+def _mount_frontend() -> None:
+    from pathlib import Path
+
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    dist = Path(_os.environ.get(
+        "RIG_FRONTEND_DIST",
+        Path(__file__).resolve().parent.parent.parent / "frontend" / "dist",
+    ))
+    if not (dist / "index.html").exists():
+        return
+    app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+
+    @app.get("/{spa_path:path}", include_in_schema=False)
+    def spa(spa_path: str):
+        if spa_path.startswith(("v1/", "health", "assets/")):
+            raise HTTPException(status_code=404, detail="not found")
+        candidate = dist / spa_path
+        if spa_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(dist / "index.html")
+
+
 # ---------------------------------------------------------------------------
 # Dev login (ONLY when RIG_DEV_LOGIN=1; production uses OIDC/WorkOS)
 # ---------------------------------------------------------------------------
@@ -133,39 +173,13 @@ def get_timeline(account_id: UUID, principal: Principal = Depends(require("accou
 @app.get("/v1/accounts/{account_id}/risk")
 def get_risk(account_id: UUID, principal: Principal = Depends(require("accounts:read"))):
     """Latest renewal-risk score with full component explanation and citations."""
+    from .scoring import explain_latest
+
     with tenant_session(principal.tenant_id) as session:
-        score = session.execute(text(
-            "SELECT id, value, reliability, score_version, as_of, inputs_hash FROM score"
-            " WHERE account_id = :aid AND score_type = 'renewal_risk'"
-            " ORDER BY as_of DESC LIMIT 1"
-        ), {"aid": str(account_id)}).mappings().one_or_none()
-        if score is None:
+        explanation = explain_latest(session, account_id)
+        if explanation is None:
             raise HTTPException(status_code=404, detail="no score computed yet")
-        components = session.execute(text(
-            "SELECT component, weight, norm_value, contribution, rationale, evidence_ids"
-            " FROM score_component WHERE score_id = :sid ORDER BY contribution DESC"
-        ), {"sid": str(score["id"])}).mappings().all()
-
-        explained = []
-        for c in components:
-            signal_ids = [str(x) for x in (c["evidence_ids"] or [])]
-            citations = []
-            if signal_ids:
-                citations = session.execute(text(
-                    "SELECT ec.claim_text, ec.claim_class, eo.kind, eo.source_system,"
-                    " eo.source_record_id, eo.statement, eo.event_at, eo.freshness_at"
-                    " FROM evidence_citation ec JOIN evidence_object eo ON eo.id = ec.evidence_id"
-                    " WHERE ec.claim_owner_type = 'signal'"
-                    " AND ec.claim_owner_id = ANY(CAST(:sids AS uuid[]))"
-                ), {"sids": "{" + ",".join(signal_ids) + "}"}).mappings().all()
-            explained.append({**dict(c), "evidence_ids": signal_ids,
-                              "citations": [dict(x) for x in citations]})
-
-        return {
-            "score": {k: v for k, v in dict(score).items() if k != "id"},
-            "direction": "higher_is_riskier",
-            "components": explained,
-        }
+        return explanation
 
 
 @app.get("/v1/admin/sources")
@@ -479,6 +493,32 @@ def generate_narrative(
 
 
 # ---------------------------------------------------------------------------
+# Investigation Copilot
+# ---------------------------------------------------------------------------
+
+@app.post("/v1/copilot/ask")
+def copilot_ask(
+    body: dict,
+    principal: Principal = Depends(require("accounts:read")),
+):
+    from .copilot.service import ask
+    from .llm import gateway as llm_gateway
+
+    question = (body or {}).get("question", "").strip()
+    if not question:
+        raise HTTPException(status_code=422, detail="body must include a 'question'")
+    if llm_gateway.default_gateway is None:
+        raise HTTPException(status_code=503, detail="LLM gateway not configured;"
+                            " the copilot needs it to parse questions")
+    with tenant_session(principal.tenant_id) as session:
+        try:
+            return ask(session, str(principal.tenant_id), llm_gateway.default_gateway,
+                       question=question, actor_id=principal.user_id)
+        except llm_gateway.LLMError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
 # Executive briefs
 # ---------------------------------------------------------------------------
 
@@ -585,3 +625,7 @@ async def usage_import(
                      payload={"status": report["status"], "imported": report["imported"],
                               "error_count": report.get("error_count", 0)})
         return report
+
+
+# Must be last: the SPA catch-all would shadow any route registered after it.
+_mount_frontend()

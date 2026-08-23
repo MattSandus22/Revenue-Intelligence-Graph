@@ -5,8 +5,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      // dev convenience: /api/* -> FastAPI, avoids CORS entirely when preferred
-      "/api": { target: "http://127.0.0.1:8000", changeOrigin: true, rewrite: (p) => p.replace(/^\/api/, "") },
+      // dev: proxy API paths to FastAPI so the app is same-origin in dev too
+      "/v1": { target: "http://127.0.0.1:8000", changeOrigin: true },
+      "/health": { target: "http://127.0.0.1:8000", changeOrigin: true },
     },
   },
 });

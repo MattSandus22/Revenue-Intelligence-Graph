@@ -1,7 +1,9 @@
 // API client — every request carries the bearer token; the backend enforces
 // tenant scoping and roles server-side (the UI only hides, never protects).
 
-const BASE = import.meta.env.VITE_API_BASE ?? "/api";
+// Same-origin by default (production container serves the SPA from FastAPI);
+// the Vite dev server proxies /v1 to the backend (vite.config.ts).
+const BASE = import.meta.env.VITE_API_BASE ?? "";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {

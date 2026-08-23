@@ -10,16 +10,15 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
-  api:
-    build: ./backend
+  app:
+    build: .
     depends_on:
       - postgres
     environment:
       DATABASE_URL: postgresql+psycopg://rig_app:rig_app@postgres:5432/rig_test
       ADMIN_DATABASE_URL: postgresql+psycopg://postgres@postgres:5432/rig_test
-    command: >
-      sh -c "python -m rig.seed &&
-             uvicorn rig.main:app --host 0.0.0.0 --port 8000"
+      RIG_DEV_LOGIN: "1"      # demo/dev only — remove for production (OIDC)
+      RIG_DEMO_SEED: "1"      # seeds the Acme walkthrough tenant on first boot
     ports:
       - "8000:8000"
 

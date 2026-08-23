@@ -146,3 +146,39 @@ def compute_renewal_risk(
         "as_of": as_of_ts.isoformat(),
         "components": components,
     }
+
+
+def explain_latest(session: Session, account_id: UUID | str) -> dict | None:
+    """Latest persisted renewal-risk score with components and citations —
+    shared by the risk endpoint and the investigation copilot."""
+    score = session.execute(text(
+        "SELECT id, value, reliability, score_version, as_of, inputs_hash FROM score"
+        " WHERE account_id = :aid AND score_type = 'renewal_risk'"
+        " ORDER BY as_of DESC LIMIT 1"
+    ), {"aid": str(account_id)}).mappings().one_or_none()
+    if score is None:
+        return None
+    components = session.execute(text(
+        "SELECT component, weight, norm_value, contribution, rationale, evidence_ids"
+        " FROM score_component WHERE score_id = :sid ORDER BY contribution DESC"
+    ), {"sid": str(score["id"])}).mappings().all()
+
+    explained = []
+    for component in components:
+        signal_ids = [str(x) for x in (component["evidence_ids"] or [])]
+        citations = []
+        if signal_ids:
+            citations = session.execute(text(
+                "SELECT ec.claim_text, ec.claim_class, eo.kind, eo.source_system,"
+                " eo.source_record_id, eo.statement, eo.event_at, eo.freshness_at"
+                " FROM evidence_citation ec JOIN evidence_object eo ON eo.id = ec.evidence_id"
+                " WHERE ec.claim_owner_type = 'signal'"
+                " AND ec.claim_owner_id = ANY(CAST(:sids AS uuid[]))"
+            ), {"sids": "{" + ",".join(signal_ids) + "}"}).mappings().all()
+        explained.append({**dict(component), "evidence_ids": signal_ids,
+                          "citations": [dict(c) for c in citations]})
+    return {
+        "score": {k: v for k, v in dict(score).items() if k != "id"},
+        "direction": "higher_is_riskier",
+        "components": explained,
+    }

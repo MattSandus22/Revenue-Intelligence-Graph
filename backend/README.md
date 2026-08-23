@@ -1,4 +1,27 @@
-# RIG Backend — Sprints 1–5 (MVP backend complete)
+# RIG Backend — Sprints 1–7 (MVP + copilot + deployment)
+
+## One-command demo
+
+```bash
+docker compose up --build     # http://localhost:8000 — seeded Acme demo,
+                              # dev sign-in enabled, SPA served same-origin
+```
+
+`rig/boot.py` runs migrations and (with `RIG_DEMO_SEED=1`) seeds the Acme
+walkthrough tenant pre-evaluated and pre-scored on first boot. Setting
+`ANTHROPIC_API_KEY` activates generative features (copilot parsing,
+sentiment, narratives); without it RIG runs as a fully-functional
+deterministic product.
+
+## Investigation Copilot (docs/06 module J)
+
+`rig/copilot/` — the LLM parses questions into filter tuples against an
+allow-listed semantic catalog (`semantic.py`); the compiler emits only
+parameterized SQL for known (field, op) pairs, surfaces everything else as
+"not applied", and unconfirmed LLM signals never satisfy queries. Diagnosis
+questions return the cited score explanation. Every ask is audited with the
+compiled filters and row count. The model never emits SQL, never answers
+from memory, and never writes.
 
 Implements the Sprint 1–3 scope from [docs/16](../docs/16-mvp-scope-and-build-plan.md):
 tenant-isolated Postgres schema, tamper-evident audit log, signal registry +

@@ -3,6 +3,7 @@ import { Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
 import Account360 from "./pages/Account360";
 import BriefPage from "./pages/BriefPage";
+import Copilot from "./pages/Copilot";
 import Login from "./pages/Login";
 import Renewals from "./pages/Renewals";
 import Workbench from "./pages/Workbench";
@@ -21,6 +22,7 @@ function Shell() {
         <NavLink to="/" end>Workbench</NavLink>
         <NavLink to="/renewals">Renewals</NavLink>
         <NavLink to="/brief">Executive Brief</NavLink>
+        <NavLink to="/copilot">Copilot</NavLink>
         <div className="whoami">
           role: {role ?? "?"} · <a href="#" onClick={(e) => { e.preventDefault(); logout(); }}>sign out</a>
         </div>
@@ -40,6 +42,7 @@ export default function App() {
             <Route path="/" element={<Workbench />} />
             <Route path="/renewals" element={<Renewals />} />
             <Route path="/brief" element={<BriefPage />} />
+            <Route path="/copilot" element={<Copilot />} />
             <Route path="/accounts/:accountId" element={<Account360 />} />
           </Route>
         </Routes>
