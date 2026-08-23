@@ -40,7 +40,7 @@ exploitation attempts against a running instance.
 |---|---|
 | Write-back approval does not enforce a second approver (proposer may self-approve) | Doc 6 requires approval, not separation-of-duties, for task-level writes; four-eyes rule planned for exec-report-affecting config (doc 15 WF-16) |
 | No token revocation / session list; 1h JWT TTL only | OIDC (WorkOS) migration in V1 brings IdP-managed sessions (docs/12) |
-| No API rate limiting yet | Planned hardening item (docs/13); LLM spend already budget-capped per tenant |
+| ~~No API rate limiting~~ **Resolved**: per-principal token buckets with cost-classed routes (`rig/ratelimit.py`) | In-process buckets fit the single-container MVP; swap to Redis buckets when multi-worker (docs/13) |
 | Dev sign-in lists tenant names cross-tenant via the admin engine | Dev-only surface, hard-gated by env; never enabled in production per boot policy |
 | Slack alert buttons are display-only (no signed interaction callbacks yet) | Interactive actions land with the Slack app hardening pass |
 
