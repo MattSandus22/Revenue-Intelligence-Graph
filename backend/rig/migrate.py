@@ -15,13 +15,19 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
 admin_engine = create_engine(settings.admin_database_url, future=True)
 
+import os
+
 # The application role is created/granted on every migration run (idempotent).
 # It is deliberately NOT the table owner and NOT a superuser: PostgreSQL RLS
 # does not apply to superusers, so app traffic must never use one.
-GRANTS_SQL = """
+# Password from RIG_APP_DB_PASSWORD (dev default 'rig_app'; production must
+# override — enforced by rig.boot's production config check).
+_APP_DB_PASSWORD = os.environ.get("RIG_APP_DB_PASSWORD", "rig_app").replace("'", "''")
+GRANTS_SQL = f"""
 DO $$ BEGIN
-  CREATE ROLE rig_app LOGIN PASSWORD 'rig_app';
+  CREATE ROLE rig_app LOGIN PASSWORD '{_APP_DB_PASSWORD}';
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+ALTER ROLE rig_app PASSWORD '{_APP_DB_PASSWORD}';
 GRANT USAGE ON SCHEMA public TO rig_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO rig_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rig_app;

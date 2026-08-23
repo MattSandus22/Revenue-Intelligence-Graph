@@ -67,14 +67,19 @@ def _mount_frontend() -> None:
         return
     app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
+    dist_root = dist.resolve()
+
     @app.get("/{spa_path:path}", include_in_schema=False)
     def spa(spa_path: str):
         if spa_path.startswith(("v1/", "health", "assets/")):
             raise HTTPException(status_code=404, detail="not found")
-        candidate = dist / spa_path
-        if spa_path and candidate.is_file():
-            return FileResponse(candidate)
-        return FileResponse(dist / "index.html")
+        if spa_path:
+            candidate = (dist_root / spa_path).resolve()
+            # containment check: reject any path (e.g. "../../pyproject.toml",
+            # percent-encoded or symlinked) that escapes the dist directory.
+            if candidate.is_relative_to(dist_root) and candidate.is_file():
+                return FileResponse(candidate)
+        return FileResponse(dist_root / "index.html")
 
 
 # ---------------------------------------------------------------------------
@@ -615,7 +620,11 @@ async def usage_import(
 ):
     from .usage_import import import_usage_csv
 
-    content = (await request.body()).decode("utf-8", errors="replace")
+    raw = await request.body()
+    if len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="CSV too large (10MB cap);"
+                            " split the file or use scheduled drops")
+    content = raw.decode("utf-8", errors="replace")
     if not content.strip():
         raise HTTPException(status_code=422, detail="empty body; POST CSV content")
     with tenant_session(principal.tenant_id) as session:
