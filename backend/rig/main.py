@@ -31,6 +31,10 @@ app.add_middleware(
     allow_methods=["*"], allow_headers=["*"],
 )
 
+from .ratelimit import rate_limit_middleware
+
+app.middleware("http")(rate_limit_middleware)
+
 
 @app.get("/health")
 def health():
