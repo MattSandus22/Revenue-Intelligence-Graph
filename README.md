@@ -32,6 +32,28 @@ This repository contains the complete, implementation-ready product specificatio
 | 20 | [Sample Acme Corp Walkthrough](docs/20-acme-corp-walkthrough.md) | End-to-end structured example payloads |
 | 21 | [Open Decisions, Assumptions, Validation Experiments](docs/21-open-decisions-and-experiments.md) | Explicit unknowns and how to resolve them |
 | 22 | [Final Prioritized Backlog](docs/22-prioritized-backlog.md) | P0/P1/P2 backlog |
+| 23 | [Implementation Status](docs/23-implementation-status.md) | Spec closure against the working codebase (102 tests) |
+
+## Execution Pack (for the founding team)
+
+Operational documents formatted for immediate execution — they reference the
+**working implementation** in `backend/` and `frontend/`, not hypotheticals:
+
+| Doc | Contents |
+|---|---|
+| [1 · Technical Architecture](execution/01-technical-architecture.md) | Stack decisions w/ status, tenant isolation, pipeline diagram, connector API, authn/z model, audit schema & retention |
+| [2 · 12-Week Sprint Plan](execution/02-sprint-plan.md) | Week-by-week from current codebase → 3 live design partners; owners, acceptance criteria, critical path, risks, MVP Definition of Done |
+| [3 · Data Model Specification](execution/03-data-model.md) | Shipped DDL for all core entities, indexing strategy, soft-delete/versioning, seed data |
+| [4 · Signal Engine Guide](execution/04-signal-engine-guide.md) | Detector pseudocode, score algorithm & weights, confidence/probability model, explanation generation |
+| [5 · Security & Compliance Checklist](execution/05-security-compliance-checklist.md) | SOC 2 Type I task list, encryption standards, access matrix, incident response, DPA/subprocessor template |
+| [6 · GTM Execution](execution/06-gtm-execution.md) | Design-partner outreach script + call outline, pilot dashboard spec, pricing copy & FAQ, battlecards, case study outlines |
+
+## Working implementation
+
+`backend/` (FastAPI + Postgres, 9 migrations, 102 tests incl. tenant-isolation
+and zero-hallucination CI gates) and `frontend/` (React SPA, 7 screens).
+One-command demo: `docker compose up --build` → http://localhost:8000 with
+the seeded Acme walkthrough. See `backend/README.md` and `SECURITY.md`.
 
 ## Non-negotiable product principles
 
