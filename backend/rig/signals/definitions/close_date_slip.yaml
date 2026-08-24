@@ -1,0 +1,16 @@
+signal: close_date_slip            # O5
+version: 1
+category: opportunity
+class: det
+detector: detect_close_date_slip
+business_meaning: >
+  An open opportunity's close date has been pushed out two or more times,
+  from field history — a pattern associated with forecast unreliability and
+  eventual loss.
+params:
+  min_slips: 2
+  window_days: 90
+severity:
+  default: medium
+requires_review: false
+suggested_actions: [deal_review, forecast_inspection]

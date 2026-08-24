@@ -62,7 +62,7 @@ def test_factory_contracts():
     with pytest.raises(CredentialError, match="missing credential fields"):
         build_connector("hubspot", {})
     with pytest.raises(CredentialError, match="unknown connector type"):
-        build_connector("salesforce", {"token": "x"})
+        build_connector("no_such_crm", {"token": "x"})
     connector = build_connector("zendesk",
                                 {"subdomain": "acme", "email": "a@b.c", "api_token": "t"})
     assert connector.source_system == "zendesk"

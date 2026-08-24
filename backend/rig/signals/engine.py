@@ -236,12 +236,89 @@ def detect_usage_drop_vs_baseline(session: Session, account, params: dict, today
     return detections
 
 
+def detect_opp_stage_stalled(session: Session, account, params: dict, today: date) -> list[Detection]:
+    """O2 — open opportunity stuck in-stage past the norm (from field history)."""
+    now = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+    rows = session.execute(text(
+        "SELECT o.id, o.name, o.stage, o.amount_cents, o.source_record_id,"
+        " o.source_system,"
+        " (SELECT max(h.changed_at) FROM opportunity_field_history h"
+        "   WHERE h.opportunity_id = o.id AND h.field = 'stage') AS last_stage_change"
+        " FROM opportunity o WHERE o.account_id = :aid"
+        " AND o.stage IS NOT NULL AND lower(o.stage) NOT LIKE '%closed%'"
+    ), {"aid": str(account["id"])}).mappings().all()
+    detections = []
+    for o in rows:
+        anchor = o["last_stage_change"]
+        if anchor is None:
+            continue                            # no history yet → can't age it
+        age_days = (now - anchor).days
+        if age_days < params["stalled_days"]:
+            continue
+        high_value = (o["amount_cents"] or 0) >= params["high_value_cents"]
+        severity = "high" if high_value else "medium"
+        detections.append(Detection(
+            semantic_key=f"opp_stage:{o['source_record_id']}",
+            severity=severity, confidence=1.0,
+            magnitude={"stage": o["stage"], "days_in_stage": age_days,
+                       "amount_cents": o["amount_cents"]},
+            rationale=(
+                f"Opportunity '{o['name']}' has been in stage '{o['stage']}'"
+                f" for {age_days} days (norm {params['stalled_days']})"),
+            evidence=[EvidenceSpec(
+                kind="crm_field", source_system=o["source_system"],
+                source_record_id=f"opportunity:{o['source_record_id']}:stage",
+                statement=(f"Opportunity {o['source_record_id']} entered stage"
+                           f" '{o['stage']}' on {anchor.date().isoformat()}, unchanged since"),
+                event_at=anchor)],
+        ))
+    return detections
+
+
+def detect_close_date_slip(session: Session, account, params: dict, today: date) -> list[Detection]:
+    """O5 — open opportunity whose close date was pushed out >= min_slips times."""
+    now = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
+    window_start = now - timedelta(days=params["window_days"])
+    rows = session.execute(text(
+        "SELECT o.id, o.name, o.close_date, o.source_record_id, o.source_system,"
+        " (SELECT count(*) FROM opportunity_field_history h"
+        "   WHERE h.opportunity_id = o.id AND h.field = 'close_date'"
+        "   AND h.changed_at >= :ws"
+        "   AND (h.new_value IS NULL OR h.old_value IS NULL"
+        "        OR h.new_value > h.old_value)) AS slip_count"   # pushed OUT only
+        " FROM opportunity o WHERE o.account_id = :aid"
+        " AND o.stage IS NOT NULL AND lower(o.stage) NOT LIKE '%closed%'"
+    ), {"aid": str(account["id"]), "ws": window_start}).mappings().all()
+    detections = []
+    for o in rows:
+        if (o["slip_count"] or 0) < params["min_slips"]:
+            continue
+        detections.append(Detection(
+            semantic_key=f"opp_slip:{o['source_record_id']}",
+            severity="medium", confidence=1.0,
+            magnitude={"slip_count": o["slip_count"],
+                       "current_close_date": o["close_date"].isoformat() if o["close_date"] else None},
+            rationale=(
+                f"Opportunity '{o['name']}' close date pushed out {o['slip_count']} times"
+                f" in {params['window_days']} days"),
+            evidence=[EvidenceSpec(
+                kind="crm_field", source_system=o["source_system"],
+                source_record_id=f"opportunity:{o['source_record_id']}:close_date",
+                statement=(f"Opportunity {o['source_record_id']} close date moved"
+                           f" {o['slip_count']} times (last: {o['close_date']})"),
+                event_at=now)],
+        ))
+    return detections
+
+
 DETECTORS = {
     "detect_renewal_no_plan": detect_renewal_no_plan,
     "detect_notice_period_approaching": detect_notice_period_approaching,
     "detect_payment_late": detect_payment_late,
     "detect_critical_ticket_unresolved": detect_critical_ticket_unresolved,
     "detect_usage_drop_vs_baseline": detect_usage_drop_vs_baseline,
+    "detect_opp_stage_stalled": detect_opp_stage_stalled,
+    "detect_close_date_slip": detect_close_date_slip,
 }
 
 
