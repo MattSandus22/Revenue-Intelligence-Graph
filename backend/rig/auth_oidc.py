@@ -9,8 +9,11 @@ mints users or roles → a short-lived RIG session JWT is issued through the
 same `issue_dev_token`/`decode_token` seam every endpoint already uses.
 
 Trust notes:
-- `state` is HMAC-signed with the app secret and expires in 10 minutes
-  (CSRF/replay guard on the callback).
+- `state` is HMAC-signed with the app secret, expires in 10 minutes, and is
+  bound to the initiating browser: /v1/auth/login stores it in an HttpOnly
+  SameSite=Lax cookie which the callback must echo (login-CSRF guard), and
+  the cookie is cleared on successful sign-in so a callback URL is single-use
+  from the app's side (the IdP additionally rejects a replayed code).
 - The org→tenant lookup runs on the ADMIN engine: authentication is
   pre-tenant-context by nature (RLS would hide every tenant row). It reads
   only tenant id/name for a matching `workos_org_id` — nothing else — and
@@ -82,6 +85,12 @@ def verify_state(state: str, max_age: int = STATE_TTL_SECONDS) -> None:
         raise OIDCError(401, "state expired — restart sign-in")
 
 
+def verify_browser_binding(state: str, browser_state: str | None) -> None:
+    """The callback must come from the browser that started the sign-in."""
+    if not browser_state or not hmac.compare_digest(browser_state, state):
+        raise OIDCError(401, "sign-in was not started in this browser — restart sign-in")
+
+
 # ---------------------------------------------------------------------------
 # Login completion
 # ---------------------------------------------------------------------------
@@ -98,6 +107,9 @@ def _tenant_for_org(organization_id: str):
 
 
 def complete_login(profile: WorkOSProfile) -> dict:
+    if not profile.organization_id:
+        # a tenant misconfigured with workos_org_id = '' must never match
+        raise OIDCError(403, "no workspace is configured for your organization")
     tenant_id = _tenant_for_org(profile.organization_id)
     if tenant_id is None:
         raise OIDCError(403, "no workspace is configured for your organization")
@@ -147,6 +159,7 @@ class HttpWorkOSClient:
         import httpx
 
         self.client_id = client_id
+        self._api_key = api_key
         self._http = httpx.Client(base_url=self.BASE, timeout=15,
                                   headers={"Authorization": f"Bearer {api_key}"})
 
@@ -159,9 +172,11 @@ class HttpWorkOSClient:
         })
 
     def authenticate_code(self, code: str) -> WorkOSProfile:
+        # WorkOS requires client_secret (the API key) in the body for the
+        # authorization_code grant, alongside the Authorization header.
         response = self._http.post("/user_management/authenticate", json={
-            "client_id": self.client_id, "grant_type": "authorization_code",
-            "code": code,
+            "client_id": self.client_id, "client_secret": self._api_key,
+            "grant_type": "authorization_code", "code": code,
         })
         response.raise_for_status()
         data = response.json()

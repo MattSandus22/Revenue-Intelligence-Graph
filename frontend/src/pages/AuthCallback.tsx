@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth";
@@ -8,8 +8,13 @@ export default function AuthCallback() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
+  // the authorization code is single-use: StrictMode's double effect run (or a
+  // remount) must not exchange it twice and clobber a completed sign-in
+  const exchanged = useRef(false);
 
   useEffect(() => {
+    if (exchanged.current) return;
+    exchanged.current = true;
     const code = params.get("code");
     const state = params.get("state");
     if (!code || !state) {

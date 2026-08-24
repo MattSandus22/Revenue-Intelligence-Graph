@@ -102,6 +102,13 @@ def test_unknown_org_and_unprovisioned_user_denied(seeded):
                                      organization_id="org_unknown"))
     assert excinfo.value.status_code == 403
 
+    # an empty organization_id (user outside any WorkOS org) must never match
+    # a tenant whose workos_org_id was misconfigured as ''
+    with pytest.raises(OIDCError) as empty_org:
+        complete_login(WorkOSProfile(email="x@y.z", idp_subject="s",
+                                     organization_id=""))
+    assert empty_org.value.status_code == 403
+
     # right org, but SSO never provisions users
     with pytest.raises(OIDCError, match="not provisioned"):
         complete_login(WorkOSProfile(email="stranger@northstarcloud.example",
@@ -122,11 +129,11 @@ async def test_endpoints_404_when_unconfigured(monkeypatch):
     from rig.main import app
 
     monkeypatch.setattr(auth_oidc, "default_workos_client", None)
-    client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
-    assert (await client.get("/v1/auth/login")).status_code == 404
-    assert (await client.get("/v1/auth/callback?code=x&state=y")).status_code == 404
-    methods = (await client.get("/v1/auth/methods")).json()
-    assert methods["sso"] is False
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        assert (await client.get("/v1/auth/login")).status_code == 404
+        assert (await client.get("/v1/auth/callback?code=x&state=y")).status_code == 404
+        methods = (await client.get("/v1/auth/methods")).json()
+        assert methods["sso"] is False
 
 
 @pytest.mark.anyio
@@ -135,22 +142,36 @@ async def test_full_http_flow(monkeypatch, seeded):
 
     _map_org(seeded)
     monkeypatch.setattr(auth_oidc, "default_workos_client", FixtureWorkOSClient(PROFILE))
-    client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        assert (await client.get("/v1/auth/methods")).json()["sso"] is True
 
-    assert (await client.get("/v1/auth/methods")).json()["sso"] is True
-    login = (await client.get("/v1/auth/login")).json()
-    state = login["authorization_url"].split("state=")[1].split("&")[0]
+        # a valid state that was never issued to THIS browser (no cookie) → 401
+        no_cookie = await client.get(
+            f"/v1/auth/callback?code=ok-code&state={make_state()}")
+        assert no_cookie.status_code == 401
 
-    callback = await client.get(f"/v1/auth/callback?code=ok-code&state={state}")
-    assert callback.status_code == 200
-    token = callback.json()["token"]
+        login = (await client.get("/v1/auth/login")).json()
+        state = login["authorization_url"].split("state=")[1].split("&")[0]
 
-    accounts = await client.get("/v1/accounts",
-                                headers={"Authorization": f"Bearer {token}"})
-    assert accounts.status_code == 200      # the issued session actually works
+        callback = await client.get(f"/v1/auth/callback?code=ok-code&state={state}")
+        assert callback.status_code == 200
+        token = callback.json()["token"]
 
-    # bad state → 401 before any provider call; provider failure → 502
-    bad_state = await client.get("/v1/auth/callback?code=ok-code&state=eviltamper")
-    assert bad_state.status_code == 401
-    provider_fail = await client.get(f"/v1/auth/callback?code=bad-code&state={make_state()}")
-    assert provider_fail.status_code == 502
+        accounts = await client.get("/v1/accounts",
+                                    headers={"Authorization": f"Bearer {token}"})
+        assert accounts.status_code == 200  # the issued session actually works
+
+        # the binding cookie is consumed on success: replaying the same
+        # callback URL is rejected before any provider call
+        replay = await client.get(f"/v1/auth/callback?code=ok-code&state={state}")
+        assert replay.status_code == 401
+
+        # bad state → 401 before any provider call; provider failure → 502
+        bad_state = await client.get("/v1/auth/callback?code=ok-code&state=eviltamper")
+        assert bad_state.status_code == 401
+        relogin = (await client.get("/v1/auth/login")).json()
+        state2 = relogin["authorization_url"].split("state=")[1].split("&")[0]
+        provider_fail = await client.get(
+            f"/v1/auth/callback?code=bad-code&state={state2}")
+        assert provider_fail.status_code == 502
+        assert "bad-code" not in provider_fail.json()["detail"]  # no internals echoed

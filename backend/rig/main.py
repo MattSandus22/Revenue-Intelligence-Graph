@@ -8,7 +8,7 @@ isolation below the application layer.
 from datetime import date
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Response
 from sqlalchemy import text
 
 from . import audit
@@ -96,7 +96,23 @@ if _os.environ.get("WORKOS_API_KEY") and _os.environ.get("WORKOS_CLIENT_ID"):
     _oidc.default_workos_client = _oidc.HttpWorkOSClient(
         _os.environ["WORKOS_API_KEY"], _os.environ["WORKOS_CLIENT_ID"])
 
-_OIDC_REDIRECT_URI = _os.environ.get("RIG_OIDC_REDIRECT_URI", "http://localhost:5173/auth/callback")
+_OIDC_REDIRECT_URI = _os.environ.get("RIG_OIDC_REDIRECT_URI", "")
+_IS_DEV = _os.environ.get("RIG_DEV_LOGIN") == "1"
+if _oidc.default_workos_client is not None and not _OIDC_REDIRECT_URI:
+    if _IS_DEV:
+        # localhost fallback is a dev convenience ONLY — a production deploy
+        # that configures SSO must say where its callback lives.
+        _OIDC_REDIRECT_URI = "http://localhost:5173/auth/callback"
+    else:
+        raise RuntimeError(
+            "RIG_OIDC_REDIRECT_URI must be set when WorkOS SSO is configured"
+            " (refusing the localhost default outside RIG_DEV_LOGIN=1)")
+
+_OIDC_STATE_COOKIE = "rig_oidc_state"
+
+import logging as _logging
+
+_log = _logging.getLogger("rig.main")
 
 
 def _oidc_enabled():
@@ -112,25 +128,36 @@ def auth_methods():
 
 
 @app.get("/v1/auth/login")
-def auth_login():
+def auth_login(response: Response):
     _oidc_enabled()
     state = _oidc.make_state()
+    # bind the state to this browser: the callback must echo it via cookie
+    response.set_cookie(
+        _OIDC_STATE_COOKIE, state, max_age=_oidc.STATE_TTL_SECONDS,
+        httponly=True, samesite="lax", secure=not _IS_DEV, path="/v1/auth/callback")
     return {"authorization_url": _oidc.default_workos_client.authorization_url(
         _OIDC_REDIRECT_URI, state)}
 
 
 @app.get("/v1/auth/callback")
-def auth_callback(code: str = Query(...), state: str = Query(...)):
+def auth_callback(response: Response, code: str = Query(...), state: str = Query(...),
+                  rig_oidc_state: str | None = Cookie(default=None)):
     _oidc_enabled()
     try:
         _oidc.verify_state(state)
+        _oidc.verify_browser_binding(state, rig_oidc_state)
         profile = _oidc.default_workos_client.authenticate_code(code)
-        return _oidc.complete_login(profile)
+        result = _oidc.complete_login(profile)
     except _oidc.OIDCError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except Exception as exc:
-        # provider/network failure: honest 502, never a half-authenticated state
-        raise HTTPException(status_code=502, detail=f"identity provider error: {exc}") from exc
+        # provider/network/internal failure: fail closed with a fixed message —
+        # exception text can carry URLs/internals and this caller is unauthenticated
+        _log.exception("OIDC callback failed")
+        raise HTTPException(status_code=502, detail="sign-in failed — try again") from exc
+    # consume the binding cookie: a captured callback URL can't be replayed
+    response.delete_cookie(_OIDC_STATE_COOKIE, path="/v1/auth/callback")
+    return result
 
 
 # ---------------------------------------------------------------------------
