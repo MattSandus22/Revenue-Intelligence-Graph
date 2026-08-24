@@ -496,6 +496,83 @@ def insight_feedback(
 
 
 # ---------------------------------------------------------------------------
+# Playbooks, tasks, precision metrics
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/playbooks")
+def list_playbooks(principal: Principal = Depends(require("accounts:read"))):
+    with tenant_session(principal.tenant_id) as session:
+        from .playbooks import ensure_default_playbooks
+
+        ensure_default_playbooks(session, str(principal.tenant_id))
+        rows = session.execute(text(
+            "SELECT key, name, description, steps, enabled FROM playbook ORDER BY name"
+        )).mappings().all()
+        return {"playbooks": [dict(r) for r in rows]}
+
+
+@app.post("/v1/insights/{insight_id}/apply-playbook")
+def apply_insight_playbook(
+    insight_id: UUID,
+    playbook: str = Query(...),
+    principal: Principal = Depends(require("accounts:write")),
+):
+    from .playbooks import apply_playbook
+
+    with tenant_session(principal.tenant_id) as session:
+        try:
+            result = apply_playbook(session, str(principal.tenant_id), str(insight_id),
+                                    playbook, actor_id=principal.user_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
+                     actor_id=principal.user_id, action="playbook.apply",
+                     object_type="insight", object_id=str(insight_id),
+                     payload={"playbook": playbook, "tasks": result["tasks_created"]})
+        return result
+
+
+@app.get("/v1/insights/{insight_id}/tasks")
+def insight_tasks(insight_id: UUID, principal: Principal = Depends(require("accounts:read"))):
+    with tenant_session(principal.tenant_id) as session:
+        rows = session.execute(text(
+            "SELECT id, title, playbook_key, step_index, assignee_role, assignee_id,"
+            " due_date, status, completed_at FROM task WHERE insight_id = :iid"
+            " ORDER BY step_index NULLS LAST, created_at"
+        ), {"iid": str(insight_id)}).mappings().all()
+        return {"tasks": [dict(r) for r in rows]}
+
+
+@app.post("/v1/tasks/{task_id}/complete")
+def complete_insight_task(
+    task_id: UUID,
+    principal: Principal = Depends(require("accounts:write")),
+):
+    from .playbooks import complete_task
+
+    with tenant_session(principal.tenant_id) as session:
+        try:
+            result = complete_task(session, str(principal.tenant_id), str(task_id),
+                                   actor_id=principal.user_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
+                     actor_id=principal.user_id, action="task.complete",
+                     object_type="task", object_id=str(task_id))
+        return result
+
+
+@app.get("/v1/metrics/precision")
+def get_precision_metrics(principal: Principal = Depends(require("accounts:read"))):
+    from .playbooks import precision_metrics
+
+    with tenant_session(principal.tenant_id) as session:
+        return precision_metrics(session)
+
+
+# ---------------------------------------------------------------------------
 # LLM signal review, write-backs, generation triggers
 # ---------------------------------------------------------------------------
 

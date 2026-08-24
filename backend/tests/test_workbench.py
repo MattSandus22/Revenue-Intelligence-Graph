@@ -13,7 +13,20 @@ from rig.signals.engine import evaluate_account
 TODAY = date.today()
 
 
-def _make_insight(seeded):
+def _reset_open_insight(seeded):
+    """Close any open Acme risk insight left by other test modules so each
+    workbench test starts from a fresh 'detected' insight."""
+    with tenant_session(seeded["nsc_tenant"]) as s:
+        s.execute(text(
+            "UPDATE insight SET state = 'outcome_known', outcome = 'test_reset',"
+            " outcome_at = now() WHERE account_id = :aid AND kind = 'risk'"
+            " AND state NOT IN ('dismissed', 'outcome_known')"
+        ), {"aid": seeded["acme_account"]})
+
+
+def _make_insight(seeded, fresh=True):
+    if fresh:
+        _reset_open_insight(seeded)
     with tenant_session(seeded["nsc_tenant"]) as s:
         evaluate_account(s, seeded["nsc_tenant"], seeded["acme_account"], today=TODAY)
         score = compute_renewal_risk(s, seeded["nsc_tenant"], seeded["acme_account"], as_of=TODAY)
@@ -24,7 +37,7 @@ def _make_insight(seeded):
 def test_risk_insight_created_and_idempotent(seeded):
     first = _make_insight(seeded)
     assert first is not None
-    second = _make_insight(seeded)
+    second = _make_insight(seeded, fresh=False)
     assert second == first  # updates the open insight, never duplicates
     with tenant_session(seeded["nsc_tenant"]) as s:
         row = s.execute(text(

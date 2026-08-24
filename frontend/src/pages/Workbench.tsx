@@ -91,6 +91,10 @@ export default function Workbench() {
           </div>
           {transition.error && <div className="banner error">{String(transition.error)}</div>}
 
+          {["accepted", "in_progress"].includes(selected.state) && (
+            <MitigationPanel insightId={selected.id} />
+          )}
+
           <h2>Why — score explanation &amp; evidence</h2>
           <RiskExplanation accountId={selected.account_id} />
 
@@ -106,6 +110,79 @@ export default function Workbench() {
           {feedback.isSuccess && <div className="banner info">Feedback recorded — thank you.</div>}
         </div>
       )}
+    </div>
+  );
+}
+
+interface Task {
+  id: string; title: string; playbook_key: string | null; assignee_role: string | null;
+  due_date: string | null; status: string;
+}
+
+function MitigationPanel({ insightId }: { insightId: string }) {
+  const queryClient = useQueryClient();
+  const [playbook, setPlaybook] = useState("");
+  const playbooks = useQuery({
+    queryKey: ["playbooks"],
+    queryFn: () => api.get<{ playbooks: { key: string; name: string; description: string }[] }>("/v1/playbooks"),
+  });
+  const tasks = useQuery({
+    queryKey: ["tasks", insightId],
+    queryFn: () => api.get<{ tasks: Task[] }>(`/v1/insights/${insightId}/tasks`),
+  });
+  const apply = useMutation({
+    mutationFn: (key: string) => api.post(`/v1/insights/${insightId}/apply-playbook?playbook=${key}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks", insightId] });
+      queryClient.invalidateQueries({ queryKey: ["workbench"] });
+    },
+  });
+  const complete = useMutation({
+    mutationFn: (taskId: string) => api.post(`/v1/tasks/${taskId}/complete`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["tasks", insightId] }),
+  });
+
+  const taskList = tasks.data?.tasks ?? [];
+  const openCount = taskList.filter((t) => t.status === "open").length;
+
+  return (
+    <div>
+      <h2>Mitigation {taskList.length > 0 && `— ${openCount} of ${taskList.length} tasks open`}</h2>
+      {taskList.length === 0 ? (
+        <div className="btn-row">
+          <select value={playbook} onChange={(e) => setPlaybook(e.target.value)}
+            style={{ width: "auto", minWidth: 220 }}>
+            <option value="">Choose a playbook…</option>
+            {playbooks.data?.playbooks.map((p) => (
+              <option key={p.key} value={p.key} title={p.description}>{p.name}</option>
+            ))}
+          </select>
+          <button disabled={!playbook || apply.isPending} onClick={() => apply.mutate(playbook)}>
+            Apply playbook
+          </button>
+        </div>
+      ) : (
+        <div>
+          {taskList.map((task) => (
+            <div key={task.id} className="evidence-item"
+              style={task.status === "done" ? { opacity: 0.55 } : undefined}>
+              <label style={{ display: "flex", gap: 8, margin: 0, color: "inherit", fontSize: 13 }}>
+                <input type="checkbox" style={{ width: "auto" }}
+                  checked={task.status === "done"} disabled={task.status !== "open"}
+                  onChange={() => complete.mutate(task.id)} />
+                <span>
+                  {task.title}
+                  <span className="meta" style={{ display: "block" }}>
+                    {task.assignee_role && <>owner: {task.assignee_role} · </>}
+                    due {task.due_date ?? "—"}
+                  </span>
+                </span>
+              </label>
+            </div>
+          ))}
+        </div>
+      )}
+      {apply.error && <div className="banner error">{String(apply.error)}</div>}
     </div>
   );
 }

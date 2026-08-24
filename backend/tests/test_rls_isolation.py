@@ -26,6 +26,8 @@ TENANT_TABLES = [
     "exec_brief",
     # 0006
     "integration_credential",
+    # 0007
+    "playbook", "task",
 ]
 
 
