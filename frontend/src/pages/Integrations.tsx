@@ -18,6 +18,10 @@ const CREDENTIAL_FIELDS: Record<string, { field: string; label: string }[]> = {
     { field: "email", label: "Admin email" },
     { field: "api_token", label: "API token" },
   ],
+  salesforce: [
+    { field: "instance_url", label: "Instance URL (…​.my.salesforce.com)" },
+    { field: "access_token", label: "OAuth access token" },
+  ],
 };
 
 export default function Integrations() {

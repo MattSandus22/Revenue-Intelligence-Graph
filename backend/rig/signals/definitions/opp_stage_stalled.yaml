@@ -1,0 +1,16 @@
+signal: opp_stage_stalled          # O2
+version: 1
+category: opportunity
+class: det
+detector: detect_opp_stage_stalled
+business_meaning: >
+  An open opportunity has sat in its current stage far longer than the norm,
+  based on the last stage change in field history. A leading indicator of a
+  stuck or slipping deal.
+params:
+  stalled_days: 45                 # absolute default; segment cohorts refine later
+  high_value_cents: 5000000        # $50k+ stalled deals escalate to high
+severity:
+  default: medium
+requires_review: false
+suggested_actions: [deal_review, next_step_task]
