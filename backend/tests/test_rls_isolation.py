@@ -24,6 +24,8 @@ TENANT_TABLES = [
     "writeback_request", "notification", "ai_model_run",
     # 0005
     "exec_brief",
+    # 0006
+    "integration_credential",
 ]
 
 

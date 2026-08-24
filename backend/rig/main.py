@@ -191,6 +191,106 @@ def get_risk(account_id: UUID, principal: Principal = Depends(require("accounts:
         return explanation
 
 
+@app.post("/v1/admin/sources", status_code=201)
+def create_source(
+    body: dict,
+    principal: Principal = Depends(require("sources:manage")),
+):
+    """Create a data source with its credentials (encrypted at rest; never
+    returned by any API and never written to logs or audit payloads)."""
+    from .connectors.factory import BUILDERS, REQUIRED_FIELDS
+    from .credentials import store_credentials
+
+    source_type = (body or {}).get("type")
+    name = (body or {}).get("name")
+    credentials = (body or {}).get("credentials") or {}
+    config = (body or {}).get("config") or {}
+    if source_type not in BUILDERS:
+        raise HTTPException(status_code=422,
+                            detail=f"type must be one of {sorted(BUILDERS)}")
+    if not name:
+        raise HTTPException(status_code=422, detail="name is required")
+    missing = [f for f in REQUIRED_FIELDS[source_type] if not credentials.get(f)]
+    if missing:
+        raise HTTPException(status_code=422,
+                            detail=f"missing credential fields for {source_type}: {missing}")
+
+    import json as _json
+
+    with tenant_session(principal.tenant_id) as session:
+        source_id = session.execute(text(
+            "INSERT INTO data_source (tenant_id, type, name, config)"
+            " VALUES (:tid, :type, :name, CAST(:config AS jsonb)) RETURNING id"
+        ), {"tid": str(principal.tenant_id), "type": source_type, "name": name,
+            "config": _json.dumps(config)}).scalar_one()
+        store_credentials(session, principal.tenant_id, source_id, credentials)
+        audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
+                     actor_id=principal.user_id, action="source.create",
+                     object_type="data_source", object_id=str(source_id),
+                     payload={"type": source_type, "name": name,
+                              "credential_fields": sorted(credentials)})  # names only, never values
+        return {"source_id": str(source_id), "type": source_type, "status": "active"}
+
+
+@app.post("/v1/admin/sources/{source_id}/sync")
+def run_sync(
+    source_id: UUID,
+    principal: Principal = Depends(require("sources:manage")),
+):
+    """Run a sync now using stored credentials. Synchronous for the MVP;
+    production moves this onto Temporal workers (docs/13)."""
+    from .connectors.base import SyncRunner
+    from .connectors.factory import CredentialError, build_connector
+    from .credentials import load_credentials
+
+    with tenant_session(principal.tenant_id) as session:
+        source = session.execute(text(
+            "SELECT id, type, status, config FROM data_source WHERE id = :id"
+        ), {"id": str(source_id)}).mappings().one_or_none()
+        if source is None:
+            raise HTTPException(status_code=404, detail="source not found")
+        if source["status"] == "disconnected":
+            raise HTTPException(status_code=409, detail="source is disconnected")
+        credentials = load_credentials(session, source_id)
+        if credentials is None:
+            raise HTTPException(status_code=409, detail="no credentials stored;"
+                                " recreate the source or rotate credentials")
+        try:
+            connector = build_connector(source["type"], credentials, dict(source["config"]))
+        except CredentialError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        summary = SyncRunner().run(session, principal.tenant_id, source_id, connector)
+        audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
+                     actor_id=principal.user_id, action="source.sync",
+                     object_type="data_source", object_id=str(source_id),
+                     payload={"status": summary["status"], "mode": summary["mode"]})
+        return summary
+
+
+@app.delete("/v1/admin/sources/{source_id}")
+def disconnect_source(
+    source_id: UUID,
+    principal: Principal = Depends(require("sources:manage")),
+):
+    """Disconnect: stop syncing and delete stored credentials. Synced data is
+    retained (frozen) — purge is the separate deletion workflow (docs/15 #20)."""
+    from .credentials import delete_credentials
+
+    with tenant_session(principal.tenant_id) as session:
+        updated = session.execute(text(
+            "UPDATE data_source SET status = 'disconnected' WHERE id = :id"
+        ), {"id": str(source_id)}).rowcount
+        if not updated:
+            raise HTTPException(status_code=404, detail="source not found")
+        credentials_deleted = delete_credentials(session, source_id)
+        audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
+                     actor_id=principal.user_id, action="source.disconnect",
+                     object_type="data_source", object_id=str(source_id),
+                     payload={"credentials_deleted": credentials_deleted})
+        return {"status": "disconnected", "credentials_deleted": credentials_deleted,
+                "note": "synced data retained; request the deletion workflow to purge"}
+
+
 @app.get("/v1/admin/sources")
 def list_sources(principal: Principal = Depends(require("sources:manage"))):
     with tenant_session(principal.tenant_id) as session:

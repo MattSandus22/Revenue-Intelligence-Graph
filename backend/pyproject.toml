@@ -13,6 +13,7 @@ dependencies = [
     "httpx>=0.27",
     "jsonschema>=4.21",
     "anthropic>=1.0",
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]
