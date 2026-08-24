@@ -258,7 +258,8 @@ def detect_opp_stage_stalled(session: Session, account, params: dict, today: dat
         high_value = (o["amount_cents"] or 0) >= params["high_value_cents"]
         severity = "high" if high_value else "medium"
         detections.append(Detection(
-            semantic_key=f"opp_stage:{o['source_record_id']}:{anchor.isoformat()}",
+            semantic_key=(f"opp_stage:{o['source_system']}:{o['source_record_id']}"
+                          f":{anchor.isoformat()}"),
             severity=severity, confidence=1.0,
             magnitude={"stage": o["stage"], "days_in_stage": age_days,
                        "amount_cents": o["amount_cents"]},
@@ -297,7 +298,7 @@ def detect_close_date_slip(session: Session, account, params: dict, today: date)
         if (o["slip_count"] or 0) < params["min_slips"]:
             continue
         detections.append(Detection(
-            semantic_key=f"opp_slip:{o['source_record_id']}",
+            semantic_key=f"opp_slip:{o['source_system']}:{o['source_record_id']}",
             severity="medium", confidence=1.0,
             magnitude={"slip_count": o["slip_count"],
                        "current_close_date": o["close_date"].isoformat() if o["close_date"] else None},

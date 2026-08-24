@@ -147,6 +147,39 @@ def test_history_defers_before_its_opportunity_exists(seeded):
     assert replayed == 1
 
 
+def test_same_record_id_across_crms_yields_distinct_signals(seeded):
+    """Semantic keys are namespaced by source_system: two CRM opportunities
+    sharing a record id on one account must not overwrite each other's signal."""
+    tid = seeded["nsc_tenant"]
+    with tenant_session(tid) as s:
+        account_id = s.execute(text(
+            "INSERT INTO account (tenant_id, name) VALUES (:tid, 'CrossCRM Corp')"
+            " RETURNING id"), {"tid": tid}).scalar_one()
+        for system in ("salesforce", "hubspot"):
+            opp_id = s.execute(text(
+                "INSERT INTO opportunity (tenant_id, account_id, name, stage,"
+                " source_system, source_record_id)"
+                " VALUES (:tid, :aid, :name, 'Proposal', :sys, 'DUP1') RETURNING id"
+            ), {"tid": tid, "aid": str(account_id),
+                "name": f"{system} dup opp", "sys": system}).scalar_one()
+            for n, (old, new) in enumerate([("2026-08-01", "2026-09-01"),
+                                            ("2026-09-01", "2026-10-01")]):
+                s.execute(text(
+                    "INSERT INTO opportunity_field_history (tenant_id, opportunity_id,"
+                    " field, old_value, new_value, changed_at, source_system,"
+                    " source_record_id)"
+                    " VALUES (:tid, :oid, 'close_date', :old, :new, :at, :sys, :rec)"
+                ), {"tid": tid, "oid": str(opp_id), "old": old, "new": new,
+                    "at": NOW - timedelta(days=5 + n), "sys": system,
+                    "rec": f"{system}-dup-h{n}"})
+        evaluate_account(s, tid, str(account_id), today=TODAY)
+        slips = s.execute(text(
+            "SELECT semantic_key FROM signal WHERE account_id = :aid"
+            " AND signal_type = 'close_date_slip' AND state = 'active'"
+        ), {"aid": str(account_id)}).scalars().all()
+    assert sorted(slips) == ["opp_slip:hubspot:DUP1", "opp_slip:salesforce:DUP1"]
+
+
 def test_incremental_only_fetches_newer(seeded):
     tid = seeded["nsc_tenant"]
     client = FixtureSalesforceClient(list(SF_ACCOUNTS))

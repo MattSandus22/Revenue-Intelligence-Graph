@@ -4,7 +4,7 @@ The 22-section specification (docs 01–22) is complete. This addendum closes it
 against the working implementation in this repository, records where the
 implementation *improved on* the spec, and marks what remains.
 
-## Built and test-enforced (107 tests, CI-gated)
+## Built and test-enforced (108 tests, CI-gated)
 
 | Spec area | Implementation | Tests |
 |---|---|---|
