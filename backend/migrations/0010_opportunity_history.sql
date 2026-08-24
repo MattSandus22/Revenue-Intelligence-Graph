@@ -3,18 +3,21 @@
 
 ALTER TABLE opportunity ADD COLUMN forecast_category TEXT;   -- omitted | pipeline | best_case | commit | closed
 ALTER TABLE opportunity ADD COLUMN owner_ref TEXT;           -- source owner id (for multi-threading later)
+-- composite key target so history rows can never reference another tenant's opportunity
+ALTER TABLE opportunity ADD CONSTRAINT uq_opportunity_tenant_id_id UNIQUE (tenant_id, id);
 
 CREATE TABLE opportunity_field_history (
   id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id        UUID NOT NULL REFERENCES tenant(id),
-  opportunity_id   UUID NOT NULL REFERENCES opportunity(id),
+  opportunity_id   UUID NOT NULL,
   field            TEXT NOT NULL,          -- stage | close_date | amount | forecast_category
   old_value        TEXT,
   new_value        TEXT,
   changed_at       TIMESTAMPTZ NOT NULL,
   source_system    TEXT NOT NULL,
   source_record_id TEXT NOT NULL,          -- provider history row id (idempotency)
-  UNIQUE (tenant_id, source_system, source_record_id)
+  UNIQUE (tenant_id, source_system, source_record_id),
+  FOREIGN KEY (tenant_id, opportunity_id) REFERENCES opportunity (tenant_id, id)
 );
 CREATE INDEX idx_opp_history ON opportunity_field_history (tenant_id, opportunity_id, field, changed_at);
 

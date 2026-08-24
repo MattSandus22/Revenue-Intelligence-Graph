@@ -258,7 +258,7 @@ def detect_opp_stage_stalled(session: Session, account, params: dict, today: dat
         high_value = (o["amount_cents"] or 0) >= params["high_value_cents"]
         severity = "high" if high_value else "medium"
         detections.append(Detection(
-            semantic_key=f"opp_stage:{o['source_record_id']}",
+            semantic_key=f"opp_stage:{o['source_record_id']}:{anchor.isoformat()}",
             severity=severity, confidence=1.0,
             magnitude={"stage": o["stage"], "days_in_stage": age_days,
                        "amount_cents": o["amount_cents"]},
@@ -284,8 +284,8 @@ def detect_close_date_slip(session: Session, account, params: dict, today: date)
         " (SELECT count(*) FROM opportunity_field_history h"
         "   WHERE h.opportunity_id = o.id AND h.field = 'close_date'"
         "   AND h.changed_at >= :ws"
-        "   AND (h.new_value IS NULL OR h.old_value IS NULL"
-        "        OR h.new_value > h.old_value)) AS slip_count"   # pushed OUT only
+        "   AND h.new_value IS NOT NULL AND h.old_value IS NOT NULL"
+        "   AND h.new_value > h.old_value) AS slip_count"        # pushed OUT only
         " FROM opportunity o WHERE o.account_id = :aid"
         " AND o.stage IS NOT NULL AND lower(o.stage) NOT LIKE '%closed%'"
     ), {"aid": str(account["id"]), "ws": window_start}).mappings().all()

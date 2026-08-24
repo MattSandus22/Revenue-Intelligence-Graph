@@ -12,7 +12,9 @@ injected protocol; tests use a fixture client.
 """
 
 from datetime import date, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Iterable, Protocol
+from urllib.parse import urlparse
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -44,8 +46,17 @@ class SalesforceClient(Protocol):
 def _domain_from_website(website: str | None) -> str | None:
     if not website:
         return None
-    host = website.lower().replace("https://", "").replace("http://", "").split("/")[0]
+    # urlparse needs a scheme to see the host; Website values are often bare.
+    target = website if "://" in website else f"//{website}"
+    host = (urlparse(target).hostname or "").lower()
     return host.removeprefix("www.") or None
+
+
+def _to_cents(value) -> int | None:
+    """Currency → integer cents without float rounding error (preserves 0)."""
+    if value is None or value == "":
+        return None
+    return int((Decimal(str(value)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 class SalesforceConnector:
@@ -87,7 +98,7 @@ class SalesforceConnector:
         arr_raw, renewal_raw = p.get(m["arr_cents"]), p.get(m["renewal_date"])
         extra = {
             "segment": p.get(m["segment"]), "tier": p.get(m["tier"]),
-            "arr_cents": int(float(arr_raw) * 100) if arr_raw else None,
+            "arr_cents": _to_cents(arr_raw),
             "renewal_date": date.fromisoformat(renewal_raw[:10]) if renewal_raw else None,
         }
         resolution = resolve_account(
@@ -152,13 +163,28 @@ class SalesforceConnector:
             "   owner_ref = EXCLUDED.owner_ref, updated_at = now()"
         ), {"tid": tenant_id, "aid": str(account_id) if account_id else None,
             "name": p.get("Name", f"Opp {record.source_record_id}"),
-            "amount": int(float(amount) * 100) if amount else None,
+            "amount": _to_cents(amount),
             "stage": p.get("StageName"), "otype": opp_type,
             "close": date.fromisoformat(close_date[:10]) if close_date else None,
             "next": p.get("NextStep"),
             "fcast": FORECAST_MAP.get(p.get("ForecastCategoryName") or p.get("ForecastCategory")),
             "owner": p.get("OwnerId"), "rec": record.source_record_id})
+        self._replay_deferred_history(session, tenant_id, record.source_record_id)
         return ApplyResult("updated" if account_id else "deferred")
+
+    def _replay_deferred_history(self, session: Session, tenant_id: str, sfdc_opp_id: str) -> None:
+        # History rows that landed before their opportunity were deferred; now
+        # that the opportunity exists, replay them from the raw landing zone
+        # (idempotent — ON CONFLICT DO NOTHING in _apply_history).
+        rows = session.execute(text(
+            "SELECT payload FROM raw_record WHERE tenant_id = :tid"
+            " AND stream = 'opportunity_history'"
+            " AND payload->>'OpportunityId' = :opp"
+        ), {"tid": tenant_id, "opp": sfdc_opp_id}).scalars().all()
+        for payload in rows:
+            self._apply_history(session, tenant_id, SourceRecord(
+                stream="opportunity_history", source_record_id=str(payload["Id"]),
+                payload=payload, cursor_value=payload.get("CreatedDate")))
 
     def _apply_history(self, session: Session, tenant_id: str, record: SourceRecord) -> ApplyResult:
         p = record.payload
@@ -185,6 +211,18 @@ class SalesforceConnector:
         return ApplyResult("created", {"field": field})
 
 
+def _validate_instance_url(instance_url: str) -> str:
+    """Only HTTPS Salesforce-owned hosts — a token must never be sent elsewhere."""
+    parsed = urlparse(instance_url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not (
+        host.endswith(".salesforce.com") or host.endswith(".force.com")
+    ):
+        raise ValueError("instance_url must be an https://….salesforce.com or …"
+                         ".force.com URL")
+    return instance_url.rstrip("/")
+
+
 class HttpSalesforceClient:
     """Real Salesforce REST/SOQL client (thin I/O layer).
 
@@ -195,7 +233,7 @@ class HttpSalesforceClient:
     def __init__(self, instance_url: str, access_token: str, api_version: str = "v60.0"):
         import httpx
 
-        self._base = f"{instance_url}/services/data/{api_version}"
+        self._base = f"{_validate_instance_url(instance_url)}/services/data/{api_version}"
         self._http = httpx.Client(headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
 
     def _soql(self, query: str) -> Iterable[dict]:
@@ -203,10 +241,18 @@ class HttpSalesforceClient:
 
         url = f"{self._base}/query"
         params: dict | None = {"q": query}
+        throttled = 0
         while url:
             response = self._http.get(url, params=params)
             if response.status_code == 429:
-                time.sleep(min(float(response.headers.get("Retry-After", "2")), 30))
+                throttled += 1
+                if throttled > 5:
+                    raise RuntimeError("Salesforce rate limit persisted after 5 retries")
+                try:
+                    retry_after = float(response.headers.get("Retry-After", "2"))
+                except ValueError:
+                    retry_after = 2.0
+                time.sleep(max(1.0, min(retry_after, 30.0)))
                 continue
             response.raise_for_status()
             data = response.json()

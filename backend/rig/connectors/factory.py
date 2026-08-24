@@ -39,9 +39,11 @@ def _build_zendesk(credentials: dict, config: dict) -> Connector:
 
 
 def _build_salesforce(credentials: dict, config: dict) -> Connector:
-    return SalesforceConnector(
-        HttpSalesforceClient(credentials["instance_url"], credentials["access_token"]),
-        mapping=config.get("mapping"))
+    try:
+        client = HttpSalesforceClient(credentials["instance_url"], credentials["access_token"])
+    except ValueError as exc:
+        raise CredentialError(str(exc)) from exc
+    return SalesforceConnector(client, mapping=config.get("mapping"))
 
 
 # Single source of truth for which fields each connector needs; the builders

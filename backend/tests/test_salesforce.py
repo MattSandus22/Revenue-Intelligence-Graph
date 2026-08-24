@@ -125,12 +125,26 @@ def test_history_defers_before_its_opportunity_exists(seeded):
     tid = seeded["nsc_tenant"]
     orphan_history = [{"Id": "H9", "OpportunityId": "006ZZZ", "Field": "StageName",
                        "OldValue": "A", "NewValue": "B", "CreatedDate": _iso(NOW)}]
-    connector = SalesforceConnector(FixtureSalesforceClient(history=orphan_history))
+    client = FixtureSalesforceClient(history=orphan_history)
+    connector = SalesforceConnector(client)
     with tenant_session(tid) as s:
         source_id = _make_source(s, tid, "sf-orphan")
         summary = SyncRunner().run(s, tid, source_id, connector)
     assert summary["status"] == "succeeded"
     assert summary["stats"]["opportunity_history"] == {"deferred": 1}
+    # when the opportunity arrives on a later sync, the deferred history row is
+    # replayed from the raw landing zone rather than lost
+    client.opportunities.append(
+        {"Id": "006ZZZ", "Name": "Late-arriving opp", "Amount": "1000",
+         "StageName": "Discovery", "CloseDate": "2026-12-01",
+         "LastModifiedDate": _iso(NOW)})
+    with tenant_session(tid) as s:
+        SyncRunner().run(s, tid, source_id, connector)
+        replayed = s.execute(text(
+            "SELECT count(*) FROM opportunity_field_history h"
+            " JOIN opportunity o ON o.id = h.opportunity_id"
+            " WHERE o.source_record_id = '006ZZZ'")).scalar_one()
+    assert replayed == 1
 
 
 def test_incremental_only_fetches_newer(seeded):
