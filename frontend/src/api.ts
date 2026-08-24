@@ -70,6 +70,7 @@ export interface RiskComponent {
 export interface RiskResponse {
   score: { value: string; reliability: string; score_version: string; as_of: string; inputs_hash: string };
   direction: string;
+  probability?: { p_nonrenewal: number; calibration: string; basis: string };
   components: RiskComponent[];
 }
 

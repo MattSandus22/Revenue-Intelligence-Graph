@@ -14,13 +14,19 @@ export function RiskExplanation({ accountId }: { accountId: string }) {
     return <div className="banner warn">No score computed yet for this account.</div>;
   if (error) return <div className="banner error">{String(error)}</div>;
 
-  const { score, components } = data!;
+  const { score, components, probability } = data!;
   const reliability = Number(score.reliability);
   return (
     <div>
       <div className="score-chip" title={`version ${score.score_version} · inputs ${score.inputs_hash.slice(0, 12)}…`}>
         <span className="value">{Math.round(Number(score.value))}</span>
         <span>/100 renewal risk · higher = riskier</span>
+        {probability && (
+          <span className="claim-badge model_prediction" title={probability.basis}>
+            P(non-renewal) {Math.round(probability.p_nonrenewal * 100)}%
+            {probability.calibration === "default_prior" ? " · default prior" : " · fitted"}
+          </span>
+        )}
       </div>
       {reliability < 0.8 && (
         <div className="banner warn" style={{ marginTop: 8 }}>

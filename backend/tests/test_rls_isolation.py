@@ -30,6 +30,8 @@ TENANT_TABLES = [
     "playbook", "task",
     # 0008
     "renewal_outcome",
+    # 0009
+    "calibration_model",
 ]
 
 

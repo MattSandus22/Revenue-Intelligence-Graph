@@ -496,6 +496,27 @@ def insight_feedback(
 
 
 # ---------------------------------------------------------------------------
+# Calibration (docs/09 progressive calibration)
+# ---------------------------------------------------------------------------
+
+@app.post("/v1/admin/calibration/fit")
+def fit_calibration(principal: Principal = Depends(require("scores:configure"))):
+    from .calibration import fit
+
+    with tenant_session(principal.tenant_id) as session:
+        result = fit(session, str(principal.tenant_id), fitted_by=principal.user_id)
+        audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
+                     actor_id=principal.user_id, action="calibration.fit",
+                     payload={"status": result.status, "labels": result.labels,
+                              "version": result.version,
+                              "brier_fitted": result.brier_fitted,
+                              "brier_prior": result.brier_prior})
+        return {"status": result.status, "labels": result.labels,
+                "version": result.version, "brier_fitted": result.brier_fitted,
+                "brier_prior": result.brier_prior}
+
+
+# ---------------------------------------------------------------------------
 # Outcomes (WF-15)
 # ---------------------------------------------------------------------------
 

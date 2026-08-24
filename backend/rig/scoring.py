@@ -177,8 +177,12 @@ def explain_latest(session: Session, account_id: UUID | str) -> dict | None:
             ), {"sids": "{" + ",".join(signal_ids) + "}"}).mappings().all()
         explained.append({**dict(component), "evidence_ids": signal_ids,
                           "citations": [dict(c) for c in citations]})
+
+    from .calibration import probability_for
+
     return {
         "score": {k: v for k, v in dict(score).items() if k != "id"},
         "direction": "higher_is_riskier",
+        "probability": probability_for(session, float(score["value"])),
         "components": explained,
     }
