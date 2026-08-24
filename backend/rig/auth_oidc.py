@@ -136,9 +136,12 @@ def complete_login(profile: WorkOSProfile) -> dict:
         raise OIDCError(403, "no workspace is configured for your organization")
 
     # Authorization check, last-login update, and the role the token carries
-    # all happen in ONE transaction with the user row locked — an admin
-    # deactivating the user or changing the role concurrently can't race a
-    # session into existence with stale authorization state.
+    # all happen in ONE transaction with the user row locked, so the issued
+    # role always matches the row state this login committed. Note the limit
+    # of that guarantee: sessions are stateless JWTs (like every token in this
+    # app), so a role change or deactivation AFTER commit isn't seen until the
+    # token expires — per-request revalidation/session versioning is tracked
+    # with the SCIM/session-management work (docs/23).
     with tenant_session(tenant_id) as session:
         user = session.execute(text(
             "SELECT id, email, role, status FROM app_user"

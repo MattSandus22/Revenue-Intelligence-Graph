@@ -43,7 +43,9 @@ implementation *improved on* the spec, and marks what remains.
 
 ## Remaining (V1+ per docs 17/22, in priority order)
 
-SAML enforced-SSO toggle · SCIM ·
+SAML enforced-SSO toggle · SCIM · session revocation / per-request
+authorization revalidation (all sessions are stateless JWTs for their TTL —
+a role change or deactivation applies at next sign-in, not mid-session) ·
 transcript ingestion (Gong) + D.2/D.3 tasks · four-eyes write-back option ·
 signed Slack interaction callbacks · Temporal for sync orchestration ·
 `subscription`/`contract` tables (renewals currently derive from
