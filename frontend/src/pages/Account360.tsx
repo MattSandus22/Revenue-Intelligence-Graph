@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { api, daysUntil, fmtDate, fmtMoney, Signal, TimelineEvent } from "../api";
 import { Severity } from "../components/badges";
@@ -51,6 +52,8 @@ export default function Account360() {
       <h2>Renewal risk</h2>
       <RiskExplanation accountId={account.id} />
 
+      <OutcomeRecorder accountId={account.id} accountName={account.name} />
+
       <h2>Active signals ({active_signals.length})</h2>
       {active_signals.length === 0 ? (
         <div className="card empty">No active signals for this account.</div>
@@ -89,6 +92,87 @@ export default function Account360() {
           </tbody>
         </table>
       ) : <div className="empty">Loading timeline…</div>}
+    </div>
+  );
+}
+
+const CHURN_REASONS = ["product_gap", "price", "champion_loss", "unresolved_support",
+  "competitor", "budget", "m_and_a", "other"];
+
+interface OutcomeResult {
+  outcome: string; was_flagged: boolean; detection_lead_days: number | null;
+  intervention: string; surprise_churn: boolean;
+}
+
+function OutcomeRecorder({ accountId, accountName }: { accountId: string; accountName: string }) {
+  const queryClient = useQueryClient();
+  const [expanded, setExpanded] = useState(false);
+  const [outcome, setOutcome] = useState("renewed");
+  const [rootCause, setRootCause] = useState("");
+  const [nextRenewal, setNextRenewal] = useState("");
+  const [notes, setNotes] = useState("");
+  const record = useMutation({
+    mutationFn: () => api.post<OutcomeResult>(`/v1/accounts/${accountId}/outcome`, {
+      outcome,
+      ...(rootCause ? { root_cause_primary: rootCause } : {}),
+      ...(nextRenewal ? { next_renewal_date: nextRenewal } : {}),
+      ...(notes ? { notes } : {}),
+    }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["account", accountId] }),
+  });
+  const needsRootCause = outcome !== "renewed";
+
+  if (!expanded) {
+    return (
+      <div className="btn-row" style={{ margin: "16px 0" }}>
+        <button className="secondary" onClick={() => setExpanded(true)}>
+          Record renewal outcome…
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="card">
+      <h2 style={{ marginTop: 0 }}>Record outcome for {accountName}</h2>
+      <label>Outcome</label>
+      <select value={outcome} onChange={(e) => setOutcome(e.target.value)}>
+        <option value="renewed">renewed</option>
+        <option value="churned">churned</option>
+        <option value="downgraded">downgraded</option>
+      </select>
+      {needsRootCause && (
+        <>
+          <label>Primary root cause (required)</label>
+          <select value={rootCause} onChange={(e) => setRootCause(e.target.value)}>
+            <option value="">choose…</option>
+            {CHURN_REASONS.map((reason) => <option key={reason}>{reason}</option>)}
+          </select>
+        </>
+      )}
+      {outcome === "renewed" && (
+        <>
+          <label>Next renewal date (optional)</label>
+          <input type="date" value={nextRenewal} onChange={(e) => setNextRenewal(e.target.value)} />
+        </>
+      )}
+      <label>Notes</label>
+      <input value={notes} onChange={(e) => setNotes(e.target.value)} />
+      <div className="btn-row">
+        <button disabled={record.isPending || (needsRootCause && !rootCause)}
+          onClick={() => record.mutate()}>Record outcome</button>
+        <button className="secondary" onClick={() => setExpanded(false)}>Cancel</button>
+      </div>
+      {record.data && (
+        <div className={`banner ${record.data.surprise_churn ? "warn" : "info"}`}
+          style={{ marginTop: 10 }}>
+          Recorded. {record.data.was_flagged
+            ? `Flagged ${record.data.detection_lead_days} days before the outcome`
+            : "Never flagged before the outcome"}
+          {" · "}intervention: {record.data.intervention}
+          {record.data.surprise_churn && " · SURPRISE CHURN (counts toward the FN report)"}
+        </div>
+      )}
+      {record.error && <div className="banner error" style={{ marginTop: 10 }}>{String(record.error)}</div>}
     </div>
   );
 }

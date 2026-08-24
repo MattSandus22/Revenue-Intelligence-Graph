@@ -496,6 +496,70 @@ def insight_feedback(
 
 
 # ---------------------------------------------------------------------------
+# Outcomes (WF-15)
+# ---------------------------------------------------------------------------
+
+@app.post("/v1/accounts/{account_id}/outcome")
+def record_account_outcome(
+    account_id: UUID,
+    body: dict,
+    principal: Principal = Depends(require("accounts:write")),
+):
+    from .outcomes import record_outcome
+
+    body = body or {}
+    try:
+        outcome_date = date.fromisoformat(body.get("outcome_date", date.today().isoformat()))
+        next_renewal = (date.fromisoformat(body["next_renewal_date"])
+                        if body.get("next_renewal_date") else None)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"bad date: {exc}") from exc
+
+    with tenant_session(principal.tenant_id) as session:
+        try:
+            result = record_outcome(
+                session, str(principal.tenant_id), str(account_id),
+                outcome=body.get("outcome", ""), outcome_date=outcome_date,
+                recorded_by=principal.user_id,
+                arr_after_cents=body.get("arr_after_cents"),
+                root_cause_primary=body.get("root_cause_primary"),
+                root_causes_secondary=body.get("root_causes_secondary"),
+                notes=body.get("notes"), next_renewal_date=next_renewal,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
+                     actor_id=principal.user_id, action="outcome.record",
+                     object_type="account", object_id=str(account_id),
+                     payload={"outcome": result["outcome"],
+                              "was_flagged": result["was_flagged"],
+                              "intervention": result["intervention"]})
+        return result
+
+
+@app.get("/v1/accounts/{account_id}/postmortem")
+def account_postmortem(account_id: UUID,
+                       principal: Principal = Depends(require("accounts:read"))):
+    from .outcomes import get_postmortem
+
+    with tenant_session(principal.tenant_id) as session:
+        postmortem = get_postmortem(session, str(account_id))
+        if postmortem is None:
+            raise HTTPException(status_code=404, detail="no recorded outcome for this account")
+        return postmortem
+
+
+@app.get("/v1/metrics/outcomes")
+def get_outcomes_report(principal: Principal = Depends(require("accounts:read"))):
+    from .outcomes import outcomes_report
+
+    with tenant_session(principal.tenant_id) as session:
+        return outcomes_report(session)
+
+
+# ---------------------------------------------------------------------------
 # Playbooks, tasks, precision metrics
 # ---------------------------------------------------------------------------
 

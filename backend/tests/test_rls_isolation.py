@@ -28,6 +28,8 @@ TENANT_TABLES = [
     "integration_credential",
     # 0007
     "playbook", "task",
+    # 0008
+    "renewal_outcome",
 ]
 
 

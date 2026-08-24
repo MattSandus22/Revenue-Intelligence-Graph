@@ -2,10 +2,20 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Account, api, daysUntil, fmtMoney } from "../api";
 
+interface OutcomesReport {
+  outcomes: Record<string, number>;
+  surprise_churn: { count: number; of_churned: number; rate: number | null };
+  calibration: { labels: number; required: number; status: string };
+}
+
 export default function Renewals() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["accounts"],
     queryFn: () => api.get<{ accounts: Account[] }>("/v1/accounts"),
+  });
+  const outcomes = useQuery({
+    queryKey: ["outcomes"],
+    queryFn: () => api.get<OutcomesReport>("/v1/metrics/outcomes"),
   });
   if (isLoading) return <div className="empty">Loading renewals…</div>;
   if (error) return <div className="banner error">{String(error)}</div>;
@@ -32,6 +42,23 @@ export default function Renewals() {
         <div className="banner warn">
           {uncovered.length} renewal{uncovered.length > 1 ? "s" : ""} within 180 days have no
           active account plan — coverage gap.
+        </div>
+      )}
+      {outcomes.data && (
+        <div className="card" style={{ display: "flex", gap: 24, flexWrap: "wrap", fontSize: 13 }}>
+          <span><strong>Outcomes recorded:</strong>{" "}
+            {Object.entries(outcomes.data.outcomes).map(([k, v]) => `${k} ${v}`).join(" · ") || "none yet"}
+          </span>
+          {outcomes.data.surprise_churn.of_churned > 0 && (
+            <span><strong>Surprise churn:</strong>{" "}
+              {outcomes.data.surprise_churn.count}/{outcomes.data.surprise_churn.of_churned}
+              {outcomes.data.surprise_churn.rate != null &&
+                ` (${Math.round(outcomes.data.surprise_churn.rate * 100)}%)`}
+            </span>
+          )}
+          <span className="chip" title="docs/09 cold-start honesty">
+            {outcomes.data.calibration.status}
+          </span>
         </div>
       )}
       <table className="data">
