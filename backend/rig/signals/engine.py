@@ -267,9 +267,12 @@ def detect_opp_stage_stalled(session: Session, account, params: dict, today: dat
                 f" for {age_days} days (norm {params['stalled_days']})"),
             evidence=[EvidenceSpec(
                 kind="crm_field", source_system=o["source_system"],
-                source_record_id=f"opportunity:{o['source_record_id']}:stage",
+                # anchor in the identity: each stage-entry episode gets its own
+                # evidence object, never a stale citation from a prior episode
+                source_record_id=(f"opportunity:{o['source_record_id']}:stage"
+                                  f":{anchor.isoformat()}"),
                 statement=(f"Opportunity {o['source_record_id']} entered stage"
-                           f" '{o['stage']}' on {anchor.date().isoformat()}, unchanged since"),
+                           f" '{o['stage']}' on {anchor.isoformat()}, unchanged since"),
                 event_at=anchor)],
         ))
     return detections
