@@ -4,6 +4,8 @@ import { AuthProvider, useAuth } from "./auth";
 import Account360 from "./pages/Account360";
 import BriefPage from "./pages/BriefPage";
 import Copilot from "./pages/Copilot";
+import DataQuality from "./pages/DataQuality";
+import Integrations from "./pages/Integrations";
 import Login from "./pages/Login";
 import Renewals from "./pages/Renewals";
 import Workbench from "./pages/Workbench";
@@ -12,9 +14,12 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 15_000, retry: 1 } },
 });
 
+const ADMIN_ROLES = ["org_admin", "data_admin"];
+
 function Shell() {
   const { token, role, logout } = useAuth();
   if (!token) return <Navigate to="/login" replace />;
+  const isAdmin = ADMIN_ROLES.includes(role ?? "");
   return (
     <div className="layout">
       <nav className="sidenav">
@@ -23,6 +28,8 @@ function Shell() {
         <NavLink to="/renewals">Renewals</NavLink>
         <NavLink to="/brief">Executive Brief</NavLink>
         <NavLink to="/copilot">Copilot</NavLink>
+        {isAdmin && <NavLink to="/integrations">Integrations</NavLink>}
+        {isAdmin && <NavLink to="/data-quality">Data Quality</NavLink>}
         <div className="whoami">
           role: {role ?? "?"} · <a href="#" onClick={(e) => { e.preventDefault(); logout(); }}>sign out</a>
         </div>
@@ -43,6 +50,8 @@ export default function App() {
             <Route path="/renewals" element={<Renewals />} />
             <Route path="/brief" element={<BriefPage />} />
             <Route path="/copilot" element={<Copilot />} />
+            <Route path="/integrations" element={<Integrations />} />
+            <Route path="/data-quality" element={<DataQuality />} />
             <Route path="/accounts/:accountId" element={<Account360 />} />
           </Route>
         </Routes>
