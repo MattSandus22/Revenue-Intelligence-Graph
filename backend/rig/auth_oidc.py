@@ -107,10 +107,18 @@ def _tenant_for_org(organization_id: str):
     from .migrate import admin_engine
 
     with admin_engine.connect() as conn:
-        return conn.execute(text(
+        ids = conn.execute(text(
             "SELECT id FROM tenant WHERE settings->>'workos_org_id' = :org"
-            " AND status = 'active' LIMIT 1"
-        ), {"org": organization_id}).scalar_one_or_none()
+            " AND status = 'active'"
+        ), {"org": organization_id}).scalars().all()
+    if len(ids) > 1:
+        # migration 0011's partial unique index prevents this; if it somehow
+        # occurs, never pick an arbitrary workspace — fail closed
+        security_log.error("workos org %s maps to %d active tenants — failing closed",
+                           organization_id, len(ids))
+        raise OIDCError(403, "workspace mapping is misconfigured —"
+                             " contact your administrator")
+    return ids[0] if ids else None
 
 
 def complete_login(profile: WorkOSProfile) -> dict:
@@ -127,10 +135,23 @@ def complete_login(profile: WorkOSProfile) -> dict:
             profile.email, profile.organization_id)
         raise OIDCError(403, "no workspace is configured for your organization")
 
+    # Authorization check, last-login update, and the role the token carries
+    # all happen in ONE transaction with the user row locked — an admin
+    # deactivating the user or changing the role concurrently can't race a
+    # session into existence with stale authorization state.
     with tenant_session(tenant_id) as session:
         user = session.execute(text(
-            "SELECT id, email, role, status FROM app_user WHERE lower(email) = lower(:email)"
+            "SELECT id, email, role, status FROM app_user"
+            " WHERE lower(email) = lower(:email) FOR UPDATE"
         ), {"email": profile.email}).mappings().one_or_none()
+        if user is not None and user["status"] == "active":
+            session.execute(text(
+                "UPDATE app_user SET last_login_at = now(), idp_subject = :sub"
+                " WHERE id = :id AND status = 'active'"
+            ), {"sub": profile.idp_subject, "id": str(user["id"])})
+            audit.record(session, tenant_id=str(tenant_id), actor_type="user",
+                         actor_id=profile.email, action="auth.login",
+                         payload={"method": "oidc", "idp_subject": profile.idp_subject})
 
     if user is None or user["status"] != "active":
         # SSO authenticates; it never provisions. Admin/SCIM creates users.
@@ -143,14 +164,6 @@ def complete_login(profile: WorkOSProfile) -> dict:
                          payload={"email": profile.email, "reason": "not_provisioned"})
         raise OIDCError(403, "your account is not provisioned in this workspace —"
                              " ask a workspace admin to add you")
-
-    with tenant_session(tenant_id) as session:
-        session.execute(text(
-            "UPDATE app_user SET last_login_at = now(), idp_subject = :sub WHERE id = :id"
-        ), {"sub": profile.idp_subject, "id": str(user["id"])})
-        audit.record(session, tenant_id=str(tenant_id), actor_type="user",
-                     actor_id=profile.email, action="auth.login",
-                     payload={"method": "oidc", "idp_subject": profile.idp_subject})
 
     from .auth import issue_dev_token  # same signing seam as every other token
 

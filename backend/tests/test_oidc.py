@@ -104,7 +104,8 @@ def test_unknown_org_and_unprovisioned_user_denied(seeded, caplog):
             complete_login(WorkOSProfile(email="x@y.z", idp_subject="s",
                                          organization_id="org_unknown"))
         assert excinfo.value.status_code == 403
-        assert "unmapped organization" in caplog.text and "org_unknown" in caplog.text
+        assert "unmapped organization" in caplog.text
+        assert "org_unknown" in caplog.text
 
         # an empty organization_id (user outside any WorkOS org) must never
         # match a tenant whose workos_org_id was misconfigured as ''
@@ -119,10 +120,26 @@ def test_unknown_org_and_unprovisioned_user_denied(seeded, caplog):
         complete_login(WorkOSProfile(email="stranger@northstarcloud.example",
                                      idp_subject="s2", organization_id="org_nsc_01"))
     with tenant_session(seeded["nsc_tenant"]) as s:
+        # assert THIS attempt's record, not a tenant-wide count that a
+        # pre-existing denial could satisfy
         denied = s.execute(text(
             "SELECT count(*) FROM audit_event WHERE action = 'auth.login_denied'"
+            " AND payload->>'email' = 'stranger@northstarcloud.example'"
+            " AND payload->>'reason' = 'not_provisioned'"
         )).scalar_one()
-    assert denied >= 1
+    assert denied == 1
+
+
+def test_duplicate_org_mapping_is_impossible(seeded):
+    """Migration 0011: two ACTIVE tenants can never claim one WorkOS org."""
+    from sqlalchemy.exc import IntegrityError
+
+    _map_org(seeded)
+    with pytest.raises(IntegrityError):
+        with admin_engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO tenant (name, settings) VALUES ('Dup Workspace',"
+                " jsonb_build_object('workos_org_id', 'org_nsc_01'))"))
 
 
 # ---------------------------------------------------------------------------
