@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
 import Account360 from "./pages/Account360";
+import AuthCallback from "./pages/AuthCallback";
 import BriefPage from "./pages/BriefPage";
 import Copilot from "./pages/Copilot";
 import DataQuality from "./pages/DataQuality";
@@ -45,6 +46,7 @@ export default function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/auth/callback" element={<AuthCallback />} />
           <Route element={<Shell />}>
             <Route path="/" element={<Workbench />} />
             <Route path="/renewals" element={<Renewals />} />

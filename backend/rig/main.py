@@ -87,6 +87,53 @@ def _mount_frontend() -> None:
 
 
 # ---------------------------------------------------------------------------
+# SSO (WorkOS OIDC) — active when WORKOS_API_KEY + WORKOS_CLIENT_ID are set
+# ---------------------------------------------------------------------------
+
+from . import auth_oidc as _oidc
+
+if _os.environ.get("WORKOS_API_KEY") and _os.environ.get("WORKOS_CLIENT_ID"):
+    _oidc.default_workos_client = _oidc.HttpWorkOSClient(
+        _os.environ["WORKOS_API_KEY"], _os.environ["WORKOS_CLIENT_ID"])
+
+_OIDC_REDIRECT_URI = _os.environ.get("RIG_OIDC_REDIRECT_URI", "http://localhost:5173/auth/callback")
+
+
+def _oidc_enabled():
+    if _oidc.default_workos_client is None:
+        raise HTTPException(status_code=404, detail="not found")
+
+
+@app.get("/v1/auth/methods")
+def auth_methods():
+    """Login-page probe: which sign-in methods this deployment offers."""
+    return {"sso": _oidc.default_workos_client is not None,
+            "dev": _os.environ.get("RIG_DEV_LOGIN") == "1"}
+
+
+@app.get("/v1/auth/login")
+def auth_login():
+    _oidc_enabled()
+    state = _oidc.make_state()
+    return {"authorization_url": _oidc.default_workos_client.authorization_url(
+        _OIDC_REDIRECT_URI, state)}
+
+
+@app.get("/v1/auth/callback")
+def auth_callback(code: str = Query(...), state: str = Query(...)):
+    _oidc_enabled()
+    try:
+        _oidc.verify_state(state)
+        profile = _oidc.default_workos_client.authenticate_code(code)
+        return _oidc.complete_login(profile)
+    except _oidc.OIDCError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except Exception as exc:
+        # provider/network failure: honest 502, never a half-authenticated state
+        raise HTTPException(status_code=502, detail=f"identity provider error: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
 # Dev login (ONLY when RIG_DEV_LOGIN=1; production uses OIDC/WorkOS)
 # ---------------------------------------------------------------------------
 

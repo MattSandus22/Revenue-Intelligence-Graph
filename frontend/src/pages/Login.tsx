@@ -16,8 +16,12 @@ export default function Login() {
   const [manualToken, setManualToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [devAvailable, setDevAvailable] = useState(true);
+  const [ssoAvailable, setSsoAvailable] = useState(false);
 
   useEffect(() => {
+    api.get<{ sso: boolean; dev: boolean }>("/v1/auth/methods")
+      .then((methods) => setSsoAvailable(methods.sso))
+      .catch(() => setSsoAvailable(false));
     api.get<{ tenants: { id: string; name: string }[] }>("/v1/dev/tenants")
       .then((data) => {
         setTenants(data.tenants);
@@ -25,6 +29,16 @@ export default function Login() {
       })
       .catch(() => setDevAvailable(false));
   }, []);
+
+  const ssoLogin = async () => {
+    setError(null);
+    try {
+      const { authorization_url } = await api.get<{ authorization_url: string }>("/v1/auth/login");
+      window.location.href = authorization_url;
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   const devLogin = async () => {
     setError(null);
@@ -42,6 +56,13 @@ export default function Login() {
     <div style={{ maxWidth: 420, margin: "80px auto" }}>
       <h1>Revenue Intelligence Graph</h1>
       <p className="subtitle">The evidence-backed operating system for retaining and expanding B2B revenue.</p>
+      {ssoAvailable && (
+        <div className="card">
+          <div className="btn-row">
+            <button onClick={ssoLogin} style={{ width: "100%" }}>Sign in with SSO</button>
+          </div>
+        </div>
+      )}
       <div className="card">
         {devAvailable ? (
           <>
