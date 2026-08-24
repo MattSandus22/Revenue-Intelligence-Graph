@@ -138,6 +138,91 @@ async def test_disconnect_deletes_credentials_and_blocks_sync(client, seeded):
 
 
 @pytest.mark.anyio
+async def test_duplicate_name_409_and_reconnect_flow(client, seeded):
+    body = {"type": "stripe", "name": "stripe-dup-test",
+            "credentials": {"api_key": SECRET}}
+    first = await client.post("/v1/admin/sources", headers=_headers(seeded), json=body)
+    assert first.status_code == 201
+    source_id = first.json()["source_id"]
+
+    # same active name → clean 409, not a 500
+    duplicate = await client.post("/v1/admin/sources", headers=_headers(seeded), json=body)
+    assert duplicate.status_code == 409 and "already" in duplicate.text
+
+    # disconnect then recreate under the same name → reactivates the SAME
+    # source (cursors reset, fresh credentials) instead of erroring
+    await client.delete(f"/v1/admin/sources/{source_id}", headers=_headers(seeded))
+    reconnect = await client.post("/v1/admin/sources", headers=_headers(seeded), json=body)
+    assert reconnect.status_code == 201
+    assert reconnect.json() == {"source_id": source_id, "type": "stripe",
+                                "status": "active", "reconnected": True}
+    with tenant_session(seeded["nsc_tenant"]) as s:
+        status = s.execute(text("SELECT status FROM data_source WHERE id = :id"),
+                           {"id": source_id}).scalar_one()
+        assert status == "active"
+        assert load_credentials(s, source_id) == {"api_key": SECRET}
+
+
+@pytest.mark.anyio
+async def test_secrets_in_config_rejected(client, seeded):
+    response = await client.post("/v1/admin/sources", headers=_headers(seeded), json={
+        "type": "stripe", "name": "stripe-cfg-test",
+        "credentials": {"api_key": SECRET},
+        "config": {"api_key": "sk-live-oops", "mapping": {}}})
+    assert response.status_code == 422
+    assert "config must not contain secrets" in response.text
+
+
+@pytest.mark.anyio
+async def test_failed_sync_returns_502(client, seeded, monkeypatch):
+    from rig.connectors.hubspot import HubSpotConnector
+
+    class ExplodingClient:
+        def list_companies(self, updated_after=None):
+            raise RuntimeError("simulated 401 from provider")
+
+        list_contacts = list_deals = list_companies
+
+    monkeypatch.setitem(factory.BUILDERS, "hubspot",
+                        lambda credentials, config: HubSpotConnector(ExplodingClient()))
+    created = await client.post("/v1/admin/sources", headers=_headers(seeded), json={
+        "type": "hubspot", "name": "hs-fail-test",
+        "credentials": {"access_token": "t"}})
+    source_id = created.json()["source_id"]
+    response = await client.post(f"/v1/admin/sources/{source_id}/sync",
+                                 headers=_headers(seeded))
+    assert response.status_code == 502
+    assert response.json()["status"] == "failed"
+
+
+def test_decrypt_error_is_typed_and_recoverable(seeded, monkeypatch):
+    from rig.credentials import CredentialDecryptError
+
+    tid = seeded["nsc_tenant"]
+    with tenant_session(tid) as s:
+        source_id = s.execute(text(
+            "INSERT INTO data_source (tenant_id, type, name)"
+            " VALUES (:tid, 'stripe', 'wrong-key-test') RETURNING id"
+        ), {"tid": tid}).scalar_one()
+        store_credentials(s, tid, source_id, {"api_key": SECRET})
+        # simulate a key rotation after storage
+        monkeypatch.setenv("RIG_CREDENTIAL_KEY",
+                           __import__("cryptography.fernet", fromlist=["Fernet"])
+                           .Fernet.generate_key().decode())
+        with pytest.raises(CredentialDecryptError, match="re-enter"):
+            load_credentials(s, source_id)
+
+
+def test_boot_rejects_malformed_credential_key(monkeypatch):
+    from rig.boot import check_production_config
+
+    monkeypatch.delenv("RIG_DEV_LOGIN", raising=False)
+    monkeypatch.setenv("RIG_CREDENTIAL_KEY", "not-a-fernet-key")
+    violations = check_production_config()
+    assert any("not a valid Fernet key" in v for v in violations)
+
+
+@pytest.mark.anyio
 async def test_source_create_validates_fields(client, seeded):
     bad_type = await client.post("/v1/admin/sources", headers=_headers(seeded),
                                  json={"type": "salesforce", "name": "x",

@@ -24,21 +24,26 @@ def _require(credentials: dict, *fields: str) -> None:
 
 
 def _build_hubspot(credentials: dict, config: dict) -> Connector:
-    _require(credentials, "access_token")
     return HubSpotConnector(HttpHubSpotClient(credentials["access_token"]),
                             mapping=config.get("mapping"))
 
 
 def _build_stripe(credentials: dict, config: dict) -> Connector:
-    _require(credentials, "api_key")
     return StripeConnector(HttpStripeClient(credentials["api_key"]))
 
 
 def _build_zendesk(credentials: dict, config: dict) -> Connector:
-    _require(credentials, "subdomain", "email", "api_token")
     return ZendeskConnector(HttpZendeskClient(
         credentials["subdomain"], credentials["email"], credentials["api_token"]))
 
+
+# Single source of truth for which fields each connector needs; the builders
+# and the API validation both read it, so the two cannot drift.
+REQUIRED_FIELDS: dict[str, list[str]] = {
+    "hubspot": ["access_token"],
+    "stripe": ["api_key"],
+    "zendesk": ["subdomain", "email", "api_token"],
+}
 
 BUILDERS: dict[str, Callable[[dict, dict], Connector]] = {
     "hubspot": _build_hubspot,
@@ -46,11 +51,12 @@ BUILDERS: dict[str, Callable[[dict, dict], Connector]] = {
     "zendesk": _build_zendesk,
 }
 
-REQUIRED_FIELDS: dict[str, list[str]] = {
-    "hubspot": ["access_token"],
-    "stripe": ["api_key"],
-    "zendesk": ["subdomain", "email", "api_token"],
-}
+# Names that must never appear in plaintext data_source.config — they belong
+# in the encrypted credential store.
+SECRET_FIELD_NAMES: set[str] = (
+    {name for fields in REQUIRED_FIELDS.values() for name in fields}
+    | {"token", "secret", "password", "client_secret", "refresh_token"}
+)
 
 
 def build_connector(source_type: str, credentials: dict, config: dict | None = None) -> Connector:
@@ -58,4 +64,5 @@ def build_connector(source_type: str, credentials: dict, config: dict | None = N
     if builder is None:
         raise CredentialError(f"unknown connector type '{source_type}';"
                               f" supported: {sorted(BUILDERS)}")
+    _require(credentials, *REQUIRED_FIELDS.get(source_type, []))
     return builder(credentials, config or {})

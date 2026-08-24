@@ -35,12 +35,23 @@ def check_production_config() -> list[str]:
         violations.append(
             "Database password for rig_app is the dev default. Set "
             "RIG_APP_DB_PASSWORD and update DATABASE_URL.")
-    if not os.environ.get("RIG_CREDENTIAL_KEY"):
+    credential_key = os.environ.get("RIG_CREDENTIAL_KEY")
+    generate_hint = ("Generate one with python -c \"from cryptography.fernet import"
+                     " Fernet; print(Fernet.generate_key().decode())\"")
+    if not credential_key:
         violations.append(
             "RIG_CREDENTIAL_KEY is unset — connector credentials would be "
-            "encrypted with the derived dev key. Generate one with "
-            "python -c \"from cryptography.fernet import Fernet;"
-            " print(Fernet.generate_key().decode())\"")
+            f"encrypted with the derived dev key. {generate_hint}")
+    else:
+        # fail fast on a malformed key instead of 500ing on first use
+        from cryptography.fernet import Fernet
+
+        try:
+            Fernet(credential_key.encode())
+        except (ValueError, TypeError):
+            violations.append(
+                "RIG_CREDENTIAL_KEY is not a valid Fernet key (32 urlsafe-base64 "
+                f"bytes). {generate_hint}")
     return violations
 
 

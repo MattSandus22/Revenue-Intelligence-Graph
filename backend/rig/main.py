@@ -198,7 +198,7 @@ def create_source(
 ):
     """Create a data source with its credentials (encrypted at rest; never
     returned by any API and never written to logs or audit payloads)."""
-    from .connectors.factory import BUILDERS, REQUIRED_FIELDS
+    from .connectors.factory import BUILDERS, REQUIRED_FIELDS, SECRET_FIELD_NAMES
     from .credentials import store_credentials
 
     source_type = (body or {}).get("type")
@@ -210,26 +210,51 @@ def create_source(
                             detail=f"type must be one of {sorted(BUILDERS)}")
     if not name:
         raise HTTPException(status_code=422, detail="name is required")
-    missing = [f for f in REQUIRED_FIELDS[source_type] if not credentials.get(f)]
+    missing = [f for f in REQUIRED_FIELDS.get(source_type, []) if not credentials.get(f)]
     if missing:
         raise HTTPException(status_code=422,
                             detail=f"missing credential fields for {source_type}: {missing}")
+    # config is stored in PLAINTEXT — refuse secret-shaped keys (they belong
+    # in `credentials`, which is encrypted at rest)
+    leaked = sorted(set(config) & SECRET_FIELD_NAMES)
+    if leaked:
+        raise HTTPException(status_code=422,
+                            detail=f"config must not contain secrets ({leaked});"
+                            " put them under 'credentials' instead")
 
     import json as _json
 
     with tenant_session(principal.tenant_id) as session:
-        source_id = session.execute(text(
-            "INSERT INTO data_source (tenant_id, type, name, config)"
-            " VALUES (:tid, :type, :name, CAST(:config AS jsonb)) RETURNING id"
-        ), {"tid": str(principal.tenant_id), "type": source_type, "name": name,
-            "config": _json.dumps(config)}).scalar_one()
+        existing = session.execute(text(
+            "SELECT id, status FROM data_source WHERE type = :type AND name = :name"
+        ), {"type": source_type, "name": name}).mappings().one_or_none()
+        if existing is not None:
+            if existing["status"] != "disconnected":
+                raise HTTPException(status_code=409,
+                                    detail=f"a {source_type} source named '{name}' already"
+                                    " exists; choose another name or disconnect it first")
+            # reconnect flow: reactivate with fresh credentials and cursors
+            source_id, reconnected = existing["id"], True
+            session.execute(text(
+                "UPDATE data_source SET status = 'active', cursors = '{}',"
+                " config = CAST(:config AS jsonb) WHERE id = :id"
+            ), {"config": _json.dumps(config), "id": str(source_id)})
+        else:
+            reconnected = False
+            source_id = session.execute(text(
+                "INSERT INTO data_source (tenant_id, type, name, config)"
+                " VALUES (:tid, :type, :name, CAST(:config AS jsonb)) RETURNING id"
+            ), {"tid": str(principal.tenant_id), "type": source_type, "name": name,
+                "config": _json.dumps(config)}).scalar_one()
         store_credentials(session, principal.tenant_id, source_id, credentials)
         audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
-                     actor_id=principal.user_id, action="source.create",
+                     actor_id=principal.user_id,
+                     action="source.reconnect" if reconnected else "source.create",
                      object_type="data_source", object_id=str(source_id),
                      payload={"type": source_type, "name": name,
                               "credential_fields": sorted(credentials)})  # names only, never values
-        return {"source_id": str(source_id), "type": source_type, "status": "active"}
+        return {"source_id": str(source_id), "type": source_type, "status": "active",
+                "reconnected": reconnected}
 
 
 @app.post("/v1/admin/sources/{source_id}/sync")
@@ -239,31 +264,40 @@ def run_sync(
 ):
     """Run a sync now using stored credentials. Synchronous for the MVP;
     production moves this onto Temporal workers (docs/13)."""
+    from fastapi.responses import JSONResponse
+
     from .connectors.base import SyncRunner
     from .connectors.factory import CredentialError, build_connector
-    from .credentials import load_credentials
+    from .credentials import CredentialDecryptError, load_credentials
 
     with tenant_session(principal.tenant_id) as session:
         source = session.execute(text(
-            "SELECT id, type, status, config FROM data_source WHERE id = :id"
+            "SELECT * FROM data_source WHERE id = :id"
         ), {"id": str(source_id)}).mappings().one_or_none()
         if source is None:
             raise HTTPException(status_code=404, detail="source not found")
         if source["status"] == "disconnected":
             raise HTTPException(status_code=409, detail="source is disconnected")
-        credentials = load_credentials(session, source_id)
+        try:
+            credentials = load_credentials(session, source_id)
+        except CredentialDecryptError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if credentials is None:
             raise HTTPException(status_code=409, detail="no credentials stored;"
-                                " recreate the source or rotate credentials")
+                                " recreate the source to re-enter them")
         try:
             connector = build_connector(source["type"], credentials, dict(source["config"]))
         except CredentialError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        summary = SyncRunner().run(session, principal.tenant_id, source_id, connector)
+        summary = SyncRunner().run(session, principal.tenant_id, source_id, connector,
+                                   source_row=source)
         audit.record(session, tenant_id=principal.tenant_id, actor_type="user",
                      actor_id=principal.user_id, action="source.sync",
                      object_type="data_source", object_id=str(source_id),
                      payload={"status": summary["status"], "mode": summary["mode"]})
+        if summary["status"] == "failed":
+            # upstream connector failure — don't let HTTP 200 mask it
+            return JSONResponse(status_code=502, content=summary)
         return summary
 
 

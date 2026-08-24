@@ -47,9 +47,9 @@ class Connector(Protocol):
 
 class SyncRunner:
     def run(self, session: Session, tenant_id: UUID | str, data_source_id: UUID | str,
-            connector: Connector) -> dict:
+            connector: Connector, source_row=None) -> dict:
         tenant_id, data_source_id = str(tenant_id), str(data_source_id)
-        source = session.execute(
+        source = source_row if source_row is not None else session.execute(
             text("SELECT * FROM data_source WHERE id = :id"), {"id": data_source_id}
         ).mappings().one()
         cursors: dict = dict(source["cursors"] or {})

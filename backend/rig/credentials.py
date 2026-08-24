@@ -40,13 +40,25 @@ def store_credentials(session: Session, tenant_id: UUID | str,
     ), {"tid": str(tenant_id), "sid": str(data_source_id), "ct": ciphertext})
 
 
+class CredentialDecryptError(Exception):
+    """Stored ciphertext cannot be decrypted with the current key (key was
+    rotated or set after storage). Recoverable: re-enter the credentials."""
+
+
 def load_credentials(session: Session, data_source_id: UUID | str) -> dict | None:
+    from cryptography.fernet import InvalidToken
+
     ciphertext = session.execute(text(
         "SELECT ciphertext FROM integration_credential WHERE data_source_id = :sid"
     ), {"sid": str(data_source_id)}).scalar_one_or_none()
     if ciphertext is None:
         return None
-    return json.loads(_fernet().decrypt(ciphertext.encode()))
+    try:
+        return json.loads(_fernet().decrypt(ciphertext.encode()))
+    except InvalidToken as exc:
+        raise CredentialDecryptError(
+            "stored credentials cannot be decrypted with the current "
+            "RIG_CREDENTIAL_KEY — re-enter the connector credentials") from exc
 
 
 def delete_credentials(session: Session, data_source_id: UUID | str) -> bool:
