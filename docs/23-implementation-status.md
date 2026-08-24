@@ -4,7 +4,7 @@ The 22-section specification (docs 01–22) is complete. This addendum closes it
 against the working implementation in this repository, records where the
 implementation *improved on* the spec, and marks what remains.
 
-## Built and test-enforced (108 tests, CI-gated)
+## Built and test-enforced (114 tests, CI-gated)
 
 | Spec area | Implementation | Tests |
 |---|---|---|
@@ -26,6 +26,7 @@ implementation *improved on* the spec, and marks what remains.
 | Security (doc 12) | Full-branch review in SECURITY.md: traversal fixed+tested, prod-secret boot gate, rate limiting, CSV cap | `test_security.py`, `test_ratelimit.py` |
 | Frontend (doc 14) | Workbench, Account 360, Renewals, Brief, Copilot, Integrations, Data Quality; claim-class badges shape+label | CI type-check + build |
 | Deployment | Single container (SPA served by API, traversal-safe), boot with prod-config gate + demo seed | smoke-verified |
+| SSO (doc 12/execution 2 wk1) | WorkOS OIDC: HMAC-signed state, org→tenant mapping via `tenant.settings.workos_org_id`, provisioning gate (SSO never mints users/roles), denial auditing in its own transaction, sessions through the standard token seam; enabled by `WORKOS_API_KEY`+`WORKOS_CLIENT_ID`, endpoints 404 otherwise | `test_oidc.py` |
 
 ## Where implementation improved the spec
 
@@ -42,7 +43,9 @@ implementation *improved on* the spec, and marks what remains.
 
 ## Remaining (V1+ per docs 17/22, in priority order)
 
-OIDC/SAML via WorkOS (dev JWT is env-gated) · SCIM ·
+SAML enforced-SSO toggle · SCIM · session revocation / per-request
+authorization revalidation (all sessions are stateless JWTs for their TTL —
+a role change or deactivation applies at next sign-in, not mid-session) ·
 transcript ingestion (Gong) + D.2/D.3 tasks · four-eyes write-back option ·
 signed Slack interaction callbacks · Temporal for sync orchestration ·
 `subscription`/`contract` tables (renewals currently derive from
