@@ -9,6 +9,7 @@ from typing import Callable
 
 from .base import Connector
 from .hubspot import HttpHubSpotClient, HubSpotConnector
+from .salesforce import HttpSalesforceClient, SalesforceConnector
 from .stripe import HttpStripeClient, StripeConnector
 from .zendesk import HttpZendeskClient, ZendeskConnector
 
@@ -37,18 +38,28 @@ def _build_zendesk(credentials: dict, config: dict) -> Connector:
         credentials["subdomain"], credentials["email"], credentials["api_token"]))
 
 
+def _build_salesforce(credentials: dict, config: dict) -> Connector:
+    try:
+        client = HttpSalesforceClient(credentials["instance_url"], credentials["access_token"])
+    except ValueError as exc:
+        raise CredentialError(str(exc)) from exc
+    return SalesforceConnector(client, mapping=config.get("mapping"))
+
+
 # Single source of truth for which fields each connector needs; the builders
 # and the API validation both read it, so the two cannot drift.
 REQUIRED_FIELDS: dict[str, list[str]] = {
     "hubspot": ["access_token"],
     "stripe": ["api_key"],
     "zendesk": ["subdomain", "email", "api_token"],
+    "salesforce": ["instance_url", "access_token"],
 }
 
 BUILDERS: dict[str, Callable[[dict, dict], Connector]] = {
     "hubspot": _build_hubspot,
     "stripe": _build_stripe,
     "zendesk": _build_zendesk,
+    "salesforce": _build_salesforce,
 }
 
 # Names that must never appear in plaintext data_source.config — they belong

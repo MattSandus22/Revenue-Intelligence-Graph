@@ -32,6 +32,8 @@ TENANT_TABLES = [
     "renewal_outcome",
     # 0009
     "calibration_model",
+    # 0010
+    "opportunity_field_history",
 ]
 
 
