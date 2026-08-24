@@ -95,19 +95,24 @@ def test_login_happy_path_issues_working_session(seeded):
             " AND actor_id = :e"), {"e": PROFILE.email}).scalar_one() >= 1
 
 
-def test_unknown_org_and_unprovisioned_user_denied(seeded):
+def test_unknown_org_and_unprovisioned_user_denied(seeded, caplog):
     _map_org(seeded)
-    with pytest.raises(OIDCError) as excinfo:
-        complete_login(WorkOSProfile(email="x@y.z", idp_subject="s",
-                                     organization_id="org_unknown"))
-    assert excinfo.value.status_code == 403
+    # org-level denials have no tenant to attribute, so they go to the server
+    # security log rather than the (tenant-scoped, hash-chained) audit table
+    with caplog.at_level("WARNING", logger="rig.auth_oidc"):
+        with pytest.raises(OIDCError) as excinfo:
+            complete_login(WorkOSProfile(email="x@y.z", idp_subject="s",
+                                         organization_id="org_unknown"))
+        assert excinfo.value.status_code == 403
+        assert "unmapped organization" in caplog.text and "org_unknown" in caplog.text
 
-    # an empty organization_id (user outside any WorkOS org) must never match
-    # a tenant whose workos_org_id was misconfigured as ''
-    with pytest.raises(OIDCError) as empty_org:
-        complete_login(WorkOSProfile(email="x@y.z", idp_subject="s",
-                                     organization_id=""))
-    assert empty_org.value.status_code == 403
+        # an empty organization_id (user outside any WorkOS org) must never
+        # match a tenant whose workos_org_id was misconfigured as ''
+        with pytest.raises(OIDCError) as empty_org:
+            complete_login(WorkOSProfile(email="x@y.z", idp_subject="s",
+                                         organization_id=""))
+        assert empty_org.value.status_code == 403
+        assert "no organization" in caplog.text
 
     # right org, but SSO never provisions users
     with pytest.raises(OIDCError, match="not provisioned"):

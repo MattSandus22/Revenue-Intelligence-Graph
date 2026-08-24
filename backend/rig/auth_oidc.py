@@ -24,6 +24,7 @@ Trust notes:
 
 import hashlib
 import hmac
+import logging
 import secrets
 import time
 from dataclasses import dataclass
@@ -37,6 +38,12 @@ from .db import tenant_session
 
 STATE_TTL_SECONDS = 600
 SESSION_TTL_SECONDS = 8 * 3600
+
+# Org-level denials (empty/unmapped organization) can't go in audit_event —
+# that table is tenant-scoped (NOT NULL tenant_id, per-tenant hash chain) and
+# there is no tenant to attribute the attempt to. They land in the server
+# security log instead; tenant-attributable denials are audited in-DB below.
+security_log = logging.getLogger("rig.auth_oidc")
 
 
 class OIDCError(Exception):
@@ -109,9 +116,15 @@ def _tenant_for_org(organization_id: str):
 def complete_login(profile: WorkOSProfile) -> dict:
     if not profile.organization_id:
         # a tenant misconfigured with workos_org_id = '' must never match
+        security_log.warning(
+            "oidc login denied: no organization (email=%s idp_subject=%s)",
+            profile.email, profile.idp_subject)
         raise OIDCError(403, "no workspace is configured for your organization")
     tenant_id = _tenant_for_org(profile.organization_id)
     if tenant_id is None:
+        security_log.warning(
+            "oidc login denied: unmapped organization (email=%s org=%s)",
+            profile.email, profile.organization_id)
         raise OIDCError(403, "no workspace is configured for your organization")
 
     with tenant_session(tenant_id) as session:
